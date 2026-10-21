@@ -82,7 +82,6 @@ export default function JadwalPraktikumScreen() {
       router.push({
         pathname: `/asisten/${session.id}` as any,
         params: {
-          id: session.id,
           role: activeRole,
           userId: activeUserId,
           nama: activeNama,
@@ -94,7 +93,6 @@ export default function JadwalPraktikumScreen() {
       router.push({
         pathname: `/praktikan/${session.id}` as any,
         params: {
-          id: session.id,
           role: activeRole,
           userId: activeUserId,
           nama: activeNama,

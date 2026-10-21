@@ -17,6 +17,9 @@ export default function RootLayout() {
       >
         <Stack.Screen name="index" options={{ title: 'Pilih Peran' }} />
         <Stack.Screen name="jadwal/index" options={{ title: 'Daftar Jadwal' }} />
+        <Stack.Screen name="asisten/[id]" options={{ title: 'Kelola Sesi Asisten' }} />
+        <Stack.Screen name="praktikan/[id]" options={{ title: 'Presensi Praktikan' }} />
+        <Stack.Screen name="praktikan/riwayat" options={{ title: 'Riwayat Kehadiran' }} />
       </Stack>
     </ThemeProvider>
   );

@@ -70,7 +70,7 @@ export default function AttendanceHistoryScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Kembali"
-            onPress={() => router.back()}
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
             style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
             <Text style={styles.backButtonText}>‹</Text>
           </Pressable>
@@ -113,7 +113,7 @@ export default function AttendanceHistoryScreen() {
             </Text>
             <Pressable
               accessibilityRole="button"
-              onPress={() => router.back()}
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
               style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
               <Text style={styles.primaryButtonText}>Kembali ke jadwal</Text>
             </Pressable>

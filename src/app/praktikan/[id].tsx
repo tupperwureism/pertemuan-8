@@ -176,7 +176,7 @@ export default function PraktikanSessionDetail() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Kembali"
-              onPress={() => router.back()}
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
               <Text style={styles.backButtonText}>‹</Text>
             </Pressable>

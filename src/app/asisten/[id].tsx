@@ -35,6 +35,7 @@ export default function AsistenSessionDetailScreen() {
 
   useEffect(() => {
     const foundSession = DUMMY_SESSIONS.find((item) => item.id === sessionId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSession(foundSession);
     if (foundSession) {
       setCatatanInput(foundSession.catatanAsisten ?? '');
@@ -47,11 +48,11 @@ export default function AsistenSessionDetailScreen() {
         <View style={styles.notFoundContainer}>
           <Text style={styles.notFoundTitle}>Sesi Tidak Ditemukan</Text>
           <Text style={styles.notFoundSubtitle}>
-            Data sesi praktikum dengan ID "{sessionId ?? '-'}" tidak tersedia di daftar jadwal.
+            Data sesi praktikum dengan ID &quot;{sessionId ?? '-'}&quot; tidak tersedia di daftar jadwal.
           </Text>
           <Pressable
             accessibilityRole="button"
-            onPress={() => router.back()}
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
             style={({ pressed }) => [
               styles.backButtonPrimary,
               pressed && styles.buttonPressed,
@@ -134,7 +135,7 @@ export default function AsistenSessionDetailScreen() {
           <View style={styles.topBar}>
             <Pressable
               accessibilityRole="button"
-              onPress={() => router.back()}
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
               style={({ pressed }) => [
                 styles.topBackButton,
                 pressed && styles.buttonPressed,
@@ -275,7 +276,7 @@ export default function AsistenSessionDetailScreen() {
                       <Text style={styles.praktikanNimText}>NIM: {item.nim}</Text>
                       {item.catatan && item.catatan.trim().length > 0 ? (
                         <Text style={styles.praktikanCatatanText}>
-                          Catatan: "{item.catatan}"
+                          Catatan: &quot;{item.catatan}&quot;
                         </Text>
                       ) : null}
                     </View>

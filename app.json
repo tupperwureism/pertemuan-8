@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "react-native-project",
-    "slug": "react-native-project",
+    "name": "pertemuan-8-projek",
+    "slug": "pertemuan-8-projek",
+    "owner": "ppk-pertemuan-8",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -17,7 +18,8 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.ppkpertemuan8.pertemuan8projek"
     },
     "web": {
       "output": "static",
@@ -37,6 +39,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5248289e-02c9-499d-ace1-9d426ed412be"
+      }
     }
   }
 }

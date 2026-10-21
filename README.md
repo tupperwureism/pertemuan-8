@@ -1,56 +1,82 @@
-# Welcome to your Expo app 👋
+# 📱 Aplikasi Presensi Praktikum — Sprint 1
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Aplikasi mobile berbasis **React Native (Expo)** untuk simulasi pencatatan kehadiran kegiatan praktikum melalui dua sudut pandang pengguna: **Asisten** dan **Praktikan**.
 
-## Get started
+Proyek ini dikembangkan pada **Sprint 1 (Antarmuka dan Alur Praktikum)** dengan fokus pada tata letak responsif (**Flexbox**), navigasi halaman (**Expo Router**), pengelolaan **React State** berbasis data lokal/dummy, serta interaksi menggunakan **Form** dan **Modal / Bottom Sheet**.
 
-1. Install dependencies
+---
 
+## 👥 Susunan Tim & Pembagian Tugas (SRS)
+
+| Peran | Nama Anggota | Tanggung Jawab / Kode SRS |
+| :--- | :--- | :--- |
+| **Project Manager (PM)** | *[Nama Anda]* | Koordinasi Sprint, Spesifikasi SRS, Integrasi & QA |
+| **Programmer 1** | *[Nama Programmer 1]* | **SRS-01 & SRS-02**: Pemilihan Peran/Identitas, Kontrak Data Dummy & Daftar Jadwal Praktikum |
+| **Programmer 2** | *[Nama Programmer 2]* | **SRS-03 & SRS-04**: Modul Asisten (Buka/Tutup Sesi, Form/Modal Konfirmasi & Rekap Kehadiran) |
+| **Programmer 3** | *[Nama Programmer 3]* | **SRS-05 & SRS-06**: Modul Praktikan (Form Presensi, Validasi Anti-Dobel, Modal Feedback & Riwayat Hadir) |
+
+---
+
+## ✨ Fitur Utama (Sprint 1)
+
+1. **Pemilihan Peran & Identitas (`SRS-01`)**
+   - Beralih peran antara **Praktikan** dan **Asisten** serta memilih identitas pengguna dummy melalui Form & Modal.
+2. **Jadwal & Detail Sesi (`SRS-02`)**
+   - Melihat daftar jadwal praktikum lengkap dengan informasi nama praktikum, kelas, waktu, ruangan, dan badge status sesi (`Belum Dibuka`, `Dibuka`, `Ditutup`).
+3. **Pengelolaan Sesi oleh Asisten (`SRS-03`)**
+   - Membuka sesi saat praktikum dimulai dan menutup sesi setelah selesai menggunakan Form catatan dan Modal konfirmasi.
+4. **Rekap Kehadiran oleh Asisten (`SRS-04`)**
+   - Memantau daftar praktikan yang telah melakukan presensi beserta waktu kehadirannya, lengkap dengan tampilan *Empty State* saat daftar masih kosong.
+5. **Pencatatan Presensi oleh Praktikan (`SRS-05`)**
+   - Melakukan presensi melalui Form ketika sesi berstatus `Dibuka`, mencatat waktu kehadiran otomatis, menampilkan Modal umpan balik, serta mencegah presensi ganda pada sesi yang sama.
+6. **Riwayat Kehadiran Praktikan (`SRS-06`)**
+   - Melihat daftar catatan kehadiran milik praktikan sendiri beserta waktu presensinya (termasuk tampilan *Empty State* jika belum pernah presensi).
+
+---
+
+## 📂 Struktur Direktori Utama
+
+```text
+src/
+├── app/
+│   ├── _layout.tsx          # Konfigurasi navigasi utama (Expo Router)
+│   ├── index.tsx            # Halaman Pilih Peran & Identitas (SRS-01)
+│   ├── jadwal/              # Halaman Daftar Jadwal Praktikum (SRS-02)
+│   ├── asisten/             # Halaman Kelola Sesi & Rekap Asisten (SRS-03, SRS-04)
+│   └── praktikan/           # Halaman Presensi & Riwayat Praktikan (SRS-05, SRS-06)
+├── components/              # Komponen UI reusable (Card, Modal, EmptyState)
+└── data/
+    └── dummyData.ts         # Data lokal/dummy untuk pengguna, jadwal, dan sesi
+```
+
+---
+
+## 🚀 Cara Menjalankan Proyek
+
+1. **Instal dependensi**
    ```bash
    npm install
    ```
 
-2. Start the app
-
+2. **Jalankan server pengembangan Expo**
    ```bash
    npx expo start
    ```
+   *(Jika menggunakan Wi-Fi kampus/kos yang memblokir koneksi lokal ke HP, gunakan mode tunnel):*
+   ```bash
+   npx expo start --tunnel
+   ```
 
-In the output, you'll find options to open the app in a
+3. **Buka di perangkat**
+   - Scan QR Code yang muncul di terminal menggunakan aplikasi **Expo Go** di Android/iOS, atau tekan `w` untuk membuka di Web Browser.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+---
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## 🧪 Pemeriksaan Kualitas Kode
 
-## Get a fresh project
-
-When you're ready, run:
+Sebelum melakukan *commit* atau mengumpulkan tugas, pastikan tidak ada error dengan menjalankan:
 
 ```bash
-npm run reset-project
+npx expo lint
+npx tsc --noEmit
 ```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-### Other setup steps
-
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.

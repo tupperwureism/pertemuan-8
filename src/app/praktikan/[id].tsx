@@ -1,6 +1,8 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -13,87 +15,29 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-type SessionStatus = 'BELUM_DIBUKA' | 'DIBUKA' | 'DITUTUP';
-
-type AttendanceRecord = {
-  id: string;
-  sessionId: string;
-  praktikanId: string;
-  namaPraktikan: string;
-  nim: string;
-  waktuHadir: string;
-  catatan?: string;
-};
-
-type PraktikumSession = {
-  id: string;
-  namaPraktikum: string;
-  kelas: string;
-  waktu: string;
-  ruangan: string;
-  status: SessionStatus;
-  catatanAsisten?: string;
-  daftarHadir: AttendanceRecord[];
-};
-
-const CURRENT_PRAKTIKAN = {
-  id: 'prk-1',
-  nama: 'Budi Santoso',
-  nim: '2301001',
-};
-
-const SESSION_BY_ID: Record<string, PraktikumSession> = {
-  'sesi-1': {
-    id: 'sesi-1',
-    namaPraktikum: 'Pemrograman Bergerak - Modul 1',
-    kelas: 'IF-A',
-    waktu: 'Senin, 08:00 - 10:00 WIB',
-    ruangan: 'Lab Mobile 1',
-    status: 'DIBUKA',
-    catatanAsisten: 'Silakan presensi maksimal 15 menit pertama.',
-    daftarHadir: [
-      {
-        id: 'abs-1',
-        sessionId: 'sesi-1',
-        praktikanId: 'prk-99',
-        namaPraktikan: 'Andi Wijaya',
-        nim: '2301099',
-        waktuHadir: '08:03 WIB',
-        catatan: 'Hadir tepat waktu',
-      },
-    ],
-  },
-  'sesi-2': {
-    id: 'sesi-2',
-    namaPraktikum: 'Pemrograman Bergerak - Modul 2',
-    kelas: 'IF-A',
-    waktu: 'Senin, 10:00 - 12:00 WIB',
-    ruangan: 'Lab Mobile 1',
-    status: 'BELUM_DIBUKA',
-    catatanAsisten: '',
-    daftarHadir: [],
-  },
-  'sesi-3': {
-    id: 'sesi-3',
-    namaPraktikum: 'Basis Data Lanjut - Modul 1',
-    kelas: 'IF-B',
-    waktu: 'Jumat, 13:00 - 15:00 WIB',
-    ruangan: 'Lab Komputasi 2',
-    status: 'DITUTUP',
-    catatanAsisten: 'Sesi praktikum telah selesai.',
-    daftarHadir: [
-      {
-        id: 'abs-2',
-        sessionId: 'sesi-3',
-        praktikanId: 'prk-1',
-        namaPraktikan: 'Budi Santoso',
-        nim: '2301001',
-        waktuHadir: '13:02 WIB',
-        catatan: 'Hadir',
-      },
-    ],
-  },
-};
+import SentimentResultCard from '@/components/SentimentResultCard';
+import { useAuth } from '@/context/AuthContext';
+import { DUMMY_SESSIONS } from '@/data/dummyData';
+import {
+  recordAttendance,
+  subscribeClassById,
+  subscribeMySessionAttendance,
+} from '@/services/attendanceService';
+import { friendlyError } from '@/services/authService';
+import {
+  subscribeMySessionPermission,
+  toSentimentResultFromDoc,
+  type PermissionDocWithMeta,
+} from '@/services/permissionService';
+import { subscribeSession } from '@/services/sessionService';
+import type {
+  AttendanceDoc,
+  ClassDoc,
+  FirestoreTimestamp,
+  PermissionStatus,
+  SessionDoc,
+  SessionStatus,
+} from '@/types/firebase';
 
 const STATUS_META: Record<SessionStatus, { label: string; background: string; color: string }> = {
   BELUM_DIBUKA: { label: 'Belum dibuka', background: '#FFF4D6', color: '#8A5A00' },
@@ -101,67 +45,240 @@ const STATUS_META: Record<SessionStatus, { label: string; background: string; co
   DITUTUP: { label: 'Sesi ditutup', background: '#FFE1E1', color: '#A12727' },
 };
 
-function formatCurrentTime() {
+const PERMISSION_STATUS_META: Record<
+  PermissionStatus,
+  { label: string; background: string; color: string }
+> = {
+  PENDING: { label: 'Menunggu pemeriksaan', background: '#FEF3C7', color: '#92400E' },
+  APPROVED: { label: 'Izin diterima', background: '#DCFCE7', color: '#166534' },
+  REJECTED: { label: 'Izin ditolak', background: '#FEE2E2', color: '#991B1B' },
+};
+
+function formatTimestamp(ts: FirestoreTimestamp | null | undefined): string {
+  if (!ts) {
+    return `${new Intl.DateTimeFormat('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date())} WIB`;
+  }
+  const date = ts.toDate();
   return `${new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-  }).format(new Date())} WIB`;
+  }).format(date)} WIB`;
+}
+
+function formatSessionWindow(
+  startsAt: FirestoreTimestamp | null | undefined,
+  endsAt: FirestoreTimestamp | null | undefined,
+): string {
+  if (!startsAt) return '-';
+  const start = startsAt.toDate();
+  const dayDate = new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(start);
+  const startClock = new Intl.DateTimeFormat('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(start);
+
+  if (!endsAt) return `${dayDate}, ${startClock} WIB`;
+  const endClock = new Intl.DateTimeFormat('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(endsAt.toDate());
+  return `${dayDate}, ${startClock} - ${endClock} WIB`;
 }
 
 export default function PraktikanSessionDetail() {
   const { id } = useLocalSearchParams<{ id?: string | string[] }>();
-  const sessionId = Array.isArray(id) ? id[0] : id ?? 'sesi-1';
-  const session = SESSION_BY_ID[sessionId] ?? SESSION_BY_ID['sesi-1'];
+  const sessionId = (Array.isArray(id) ? id[0] : id) ?? '';
+  const { uid, profile, status: authStatus } = useAuth();
 
-  const initialAttendance = useMemo(
-    () =>
-      session.daftarHadir.find(
-        (record) => record.praktikanId === CURRENT_PRAKTIKAN.id,
-      ),
-    [session],
-  );
+  const [session, setSession] = useState<SessionDoc | null>(null);
+  const [classDoc, setClassDoc] = useState<ClassDoc | null>(null);
+  const [attendance, setAttendance] = useState<AttendanceDoc | null>(null);
+  const [permission, setPermission] = useState<PermissionDocWithMeta | null>(null);
 
-  const [attendance, setAttendance] = useState<AttendanceRecord | undefined>(initialAttendance);
-  const [catatan, setCatatan] = useState('');
-  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [catatan, setCatatan] = useState<string>('');
+  const [feedbackVisible, setFeedbackVisible] = useState<boolean>(false);
 
-  const isSessionOpen = session.status === 'DIBUKA';
-  const canAttend = isSessionOpen && !attendance;
-  const statusMeta = STATUS_META[session.status];
+  const canSubscribe = Boolean(sessionId && uid);
 
-  const submitAttendance = () => {
-    if (!canAttend) return;
+  // Listener real-time untuk dokumen sesi, presensi praktikan, dan izin praktikan
+  useEffect(() => {
+    if (!canSubscribe || !uid) {
+      return;
+    }
 
-    const newAttendance: AttendanceRecord = {
-      id: `abs-${Date.now()}`,
-      sessionId: session.id,
-      praktikanId: CURRENT_PRAKTIKAN.id,
-      namaPraktikan: CURRENT_PRAKTIKAN.nama,
-      nim: CURRENT_PRAKTIKAN.nim,
-      waktuHadir: formatCurrentTime(),
-      catatan: catatan.trim() || 'Hadir',
+    let sessionLoaded = false;
+    let attendanceLoaded = false;
+    const markReady = () => {
+      if (sessionLoaded && attendanceLoaded) {
+        setLoading(false);
+      }
     };
 
-    setAttendance(newAttendance);
-    setFeedbackVisible(true);
+    const unsubSession = subscribeSession(
+      sessionId,
+      (nextSession) => {
+        setSession(nextSession);
+        setErrorMessage(null);
+        sessionLoaded = true;
+        markReady();
+      },
+      (err) => {
+        setErrorMessage(friendlyError(err));
+        setLoading(false);
+      },
+    );
+
+    const unsubAttendance = subscribeMySessionAttendance(
+      sessionId,
+      uid,
+      (nextAttendance) => {
+        setAttendance(nextAttendance);
+        attendanceLoaded = true;
+        markReady();
+      },
+      (err) => {
+        setErrorMessage(friendlyError(err));
+        setLoading(false);
+      },
+    );
+
+    const unsubPermission = subscribeMySessionPermission(
+      sessionId,
+      uid,
+      (nextPermission) => {
+        setPermission(nextPermission);
+      },
+      () => {
+        // Jangan blokir layar presensi bila listener izin gagal
+      },
+    );
+
+    return () => {
+      unsubSession();
+      unsubAttendance();
+      unsubPermission();
+    };
+  }, [canSubscribe, sessionId, uid]);
+
+  // Listener informasi kelas untuk menampilkan nama praktikum dan kode kelas
+  useEffect(() => {
+    const targetClassId = session?.classId;
+    if (!targetClassId || !uid) {
+      return;
+    }
+    return subscribeClassById(targetClassId, (nextClass) => {
+      setClassDoc(nextClass);
+    });
+  }, [session?.classId, uid]);
+
+  // Fallback tampilan lokal bila belum login Firebase & membuka ID dummy Sprint 1
+  const dummyFallback = !uid ? DUMMY_SESSIONS.find((s) => s.id === sessionId) : undefined;
+
+  const effectiveStatus: SessionStatus =
+    session?.status ?? dummyFallback?.status ?? 'BELUM_DIBUKA';
+  const statusMeta = STATUS_META[effectiveStatus];
+
+  const courseTitle = classDoc
+    ? `${classDoc.mataPraktikum} — ${ session?.judul ?? '' }`
+    : (session?.judul ?? dummyFallback?.namaPraktikum ?? 'Sesi Praktikum');
+  const kodeKelas = classDoc?.kodeKelas ?? classDoc?.nama ?? dummyFallback?.kelas ?? '-';
+  const ruangan = session?.ruangan ?? dummyFallback?.ruangan ?? '-';
+  const waktuLabel = session
+    ? formatSessionWindow(session.startsAt, session.endsAt)
+    : (dummyFallback?.waktu ?? '-');
+  const catatanAsisten = session?.catatan ?? dummyFallback?.catatanAsisten ?? '';
+
+  const studentName = profile?.nama ?? (uid ? 'Praktikan' : 'Belum Login (Mode Pratinjau)');
+  const studentNim = profile?.nomorInduk ?? (uid ? uid.slice(0, 8) : '-');
+
+  const isSessionOpen = effectiveStatus === 'DIBUKA';
+  const canAttend = Boolean(uid && session && isSessionOpen && !attendance && !submitting);
+
+  const handleSubmitAttendance = async () => {
+    if (!uid) {
+      Alert.alert(
+        'Perlu Login Firebase',
+        'Silakan masuk menggunakan akun praktikan terlebih dahulu untuk mencatat presensi ke Firestore.',
+      );
+      return;
+    }
+    if (!canAttend) return;
+
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await recordAttendance(sessionId, uid, catatan.trim() || undefined);
+      setFeedbackVisible(true);
+    } catch (err) {
+      const msg =
+        err instanceof Error && !('code' in err) ? err.message : friendlyError(err);
+      setErrorMessage(msg);
+      Alert.alert('Gagal Presensi', msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const openHistory = () => {
-    router.push({
-      pathname: '/praktikan/riwayat',
-      params: attendance
-        ? {
-            sessionId: attendance.sessionId,
-            namaPraktikum: session.namaPraktikum,
-            kelas: session.kelas,
-            waktuHadir: attendance.waktuHadir,
-            catatan: attendance.catatan ?? 'Hadir',
-          }
-        : undefined,
-    });
     setFeedbackVisible(false);
+    router.push('/praktikan/riwayat');
   };
+
+  const openPermissionForm = () => {
+    router.push(`/praktikan/izin/${sessionId}` as never);
+  };
+
+  const openPermissionList = () => {
+    router.push('/praktikan/izin' as never);
+  };
+
+  if (authStatus === 'loading' || (canSubscribe && loading)) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={styles.centeredContainer}>
+          <ActivityIndicator size="large" color="#2D5BDB" />
+          <Text style={styles.loadingText}>Memuat data sesi dari Firestore...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (uid && !session && !errorMessage) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={styles.centeredContainer}>
+          <Text style={styles.emptyTitle}>Sesi Tidak Ditemukan</Text>
+          <Text style={styles.emptySubtitle}>
+            Sesi dengan ID &ldquo;{sessionId}&rdquo; tidak tersedia atau Anda bukan anggota kelas ini.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
+            <Text style={styles.primaryButtonText}>Kembali ke Jadwal</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -182,9 +299,25 @@ export default function PraktikanSessionDetail() {
             </Pressable>
             <View style={styles.topBarCopy}>
               <Text style={styles.eyebrow}>MODUL PRAKTIKAN</Text>
-              <Text style={styles.pageTitle}>Detail sesi</Text>
+              <Text style={styles.pageTitle}>Detail sesi & presensi</Text>
             </View>
           </View>
+
+          {!uid ? (
+            <View style={styles.warningBanner}>
+              <Text style={styles.warningBannerTitle}>Mode Pratinjau (Belum Login Firebase)</Text>
+              <Text style={styles.warningBannerText}>
+                Anda sedang melihat data pratinjau. Login dengan akun praktikan untuk mencatat presensi ke Firestore, atau buka halaman Pengajuan Izin di bawah untuk menguji model AI sentimen lokal.
+              </Text>
+            </View>
+          ) : null}
+
+          {errorMessage ? (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorBannerTitle}>Terjadi Kendala</Text>
+              <Text style={styles.errorBannerText}>{errorMessage}</Text>
+            </View>
+          ) : null}
 
           <View style={styles.heroCard}>
             <View style={styles.heroHeader}>
@@ -194,24 +327,24 @@ export default function PraktikanSessionDetail() {
                   {statusMeta.label}
                 </Text>
               </View>
-              <Text style={styles.sessionCode}>{session.id.toUpperCase()}</Text>
+              <Text style={styles.sessionCode}>{sessionId.toUpperCase()}</Text>
             </View>
 
-            <Text style={styles.courseTitle}>{session.namaPraktikum}</Text>
+            <Text style={styles.courseTitle}>{courseTitle}</Text>
 
             <View style={styles.detailGrid}>
-              <DetailItem label="Kelas" value={session.kelas} />
-              <DetailItem label="Ruangan" value={session.ruangan} />
-              <DetailItem label="Waktu" value={session.waktu} wide />
+              <DetailItem label="Kelas" value={kodeKelas} />
+              <DetailItem label="Ruangan" value={ruangan} />
+              <DetailItem label="Waktu" value={waktuLabel} wide />
             </View>
           </View>
 
-          {session.catatanAsisten ? (
+          {catatanAsisten ? (
             <View style={styles.infoCard}>
               <Text style={styles.infoIcon}>i</Text>
               <View style={styles.infoCopy}>
                 <Text style={styles.infoTitle}>Catatan asisten</Text>
-                <Text style={styles.infoText}>{session.catatanAsisten}</Text>
+                <Text style={styles.infoText}>{catatanAsisten}</Text>
               </View>
             </View>
           ) : null}
@@ -221,7 +354,9 @@ export default function PraktikanSessionDetail() {
               <Text style={styles.sectionEyebrow}>PRESENSI</Text>
               <Text style={styles.sectionTitle}>Konfirmasi kehadiran</Text>
             </View>
-            <Text style={styles.studentNim}>{CURRENT_PRAKTIKAN.nim}</Text>
+            <Text style={styles.studentNim}>
+              {studentName} · {studentNim}
+            </Text>
           </View>
 
           {attendance ? (
@@ -232,7 +367,7 @@ export default function PraktikanSessionDetail() {
               <View style={styles.successCopy}>
                 <Text style={styles.successTitle}>Sudah presensi</Text>
                 <Text style={styles.successText}>
-                  Kehadiran {CURRENT_PRAKTIKAN.nama} tercatat pada {attendance.waktuHadir}.
+                  Kehadiran {studentName} tercatat pada {formatTimestamp(attendance.attendedAt)}.
                 </Text>
                 {attendance.catatan ? (
                   <Text style={styles.successNote}>“{attendance.catatan}”</Text>
@@ -241,10 +376,10 @@ export default function PraktikanSessionDetail() {
             </View>
           ) : (
             <View style={styles.formCard}>
-              <Text style={styles.inputLabel}>Catatan kehadiran</Text>
+              <Text style={styles.inputLabel}>Catatan kehadiran (opsional)</Text>
               <TextInput
                 accessibilityLabel="Catatan kehadiran"
-                editable={isSessionOpen}
+                editable={isSessionOpen && !submitting}
                 maxLength={120}
                 multiline
                 onChangeText={setCatatan}
@@ -263,8 +398,8 @@ export default function PraktikanSessionDetail() {
               {!isSessionOpen ? (
                 <View style={styles.disabledNotice}>
                   <Text style={styles.disabledNoticeText}>
-                    {session.status === 'BELUM_DIBUKA'
-                      ? 'Presensi belum tersedia karena sesi belum dibuka.'
+                    {effectiveStatus === 'BELUM_DIBUKA'
+                      ? 'Presensi belum tersedia karena sesi belum dibuka oleh asisten.'
                       : 'Presensi tidak tersedia karena sesi sudah ditutup.'}
                   </Text>
                 </View>
@@ -275,27 +410,91 @@ export default function PraktikanSessionDetail() {
           <Pressable
             accessibilityRole="button"
             disabled={!canAttend}
-            onPress={submitAttendance}
+            onPress={handleSubmitAttendance}
             style={({ pressed }) => [
               styles.primaryButton,
               !canAttend && styles.primaryButtonDisabled,
               pressed && canAttend && styles.primaryButtonPressed,
             ]}>
-            <Text
-              style={[
-                styles.primaryButtonText,
-                !canAttend && styles.primaryButtonTextDisabled,
-              ]}>
-              {attendance ? 'Presensi sudah tercatat' : 'Hadir sekarang'}
-            </Text>
+            {submitting ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text
+                style={[
+                  styles.primaryButtonText,
+                  !canAttend && styles.primaryButtonTextDisabled,
+                ]}>
+                {attendance ? 'Presensi sudah tercatat' : 'Hadir sekarang'}
+              </Text>
+            )}
           </Pressable>
 
-          <Pressable
-            accessibilityRole="button"
-            onPress={openHistory}
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
-            <Text style={styles.secondaryButtonText}>Lihat catatan kehadiran saya</Text>
-          </Pressable>
+          {/* Bagian Pengajuan Izin (SRS-11 & SRS-12) */}
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.sectionEyebrow}>PENGAJUAN IZIN</Text>
+              <Text style={styles.sectionTitle}>Berhalangan hadir?</Text>
+            </View>
+          </View>
+
+          {permission ? (
+            <View style={styles.permissionStatusCard}>
+              <View style={styles.permissionStatusHeader}>
+                <Text style={styles.permissionStatusTitle}>Status Izin Sesi Ini</Text>
+                <View
+                  style={[
+                    styles.permissionBadge,
+                    { backgroundColor: PERMISSION_STATUS_META[permission.status].background },
+                  ]}>
+                  <Text
+                    style={[
+                      styles.permissionBadgeText,
+                      { color: PERMISSION_STATUS_META[permission.status].color },
+                    ]}>
+                    {PERMISSION_STATUS_META[permission.status].label}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.permissionReasonLabel}>Alasan yang diajukan:</Text>
+              <Text style={styles.permissionReasonText}>“{permission.alasan}”</Text>
+
+              <SentimentResultCard result={toSentimentResultFromDoc(permission)} />
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={openPermissionList}
+                style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
+                <Text style={styles.secondaryButtonText}>Lihat semua status izin saya</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.permissionPromptCard}>
+              <Text style={styles.permissionPromptText}>
+                Jika Anda tidak dapat mengikuti sesi ini karena sakit atau keperluan mendesak, ajukan izin beserta alasannya.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={openPermissionForm}
+                style={({ pressed }) => [styles.permissionActionBtn, pressed && styles.pressed]}>
+                <Text style={styles.permissionActionBtnText}>Ajukan izin untuk sesi ini</Text>
+              </Pressable>
+            </View>
+          )}
+
+          <View style={styles.bottomActionsRow}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={openHistory}
+              style={({ pressed }) => [styles.secondaryButton, styles.flexButton, pressed && styles.pressed]}>
+              <Text style={styles.secondaryButtonText}>Riwayat kehadiran</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={openPermissionList}
+              style={({ pressed }) => [styles.secondaryButton, styles.flexButton, pressed && styles.pressed]}>
+              <Text style={styles.secondaryButtonText}>Daftar izin saya</Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
 
@@ -311,11 +510,11 @@ export default function PraktikanSessionDetail() {
             </View>
             <Text style={styles.modalTitle}>Presensi berhasil</Text>
             <Text style={styles.modalText}>
-              Kehadiranmu sudah tercatat dan tidak dapat dikirim ulang untuk sesi ini.
+              Kehadiranmu sudah tercatat di Firestore dan tidak dapat dikirim ulang untuk sesi ini.
             </Text>
             <View style={styles.modalTimeCard}>
               <Text style={styles.modalTimeLabel}>Waktu kehadiran</Text>
-              <Text style={styles.modalTime}>{attendance?.waktuHadir}</Text>
+              <Text style={styles.modalTime}>{formatTimestamp(attendance?.attendedAt)}</Text>
             </View>
             <Pressable
               accessibilityRole="button"
@@ -348,6 +547,22 @@ function DetailItem({ label, value, wide = false }: { label: string; value: stri
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   safeArea: { flex: 1, backgroundColor: '#F5F7FB' },
+  centeredContainer: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+    justifyContent: 'center',
+    padding: 24,
+  },
+  loadingText: { color: '#475467', fontSize: 14, fontWeight: '600' },
+  emptyTitle: { color: '#101828', fontSize: 20, fontWeight: '800', textAlign: 'center' },
+  emptySubtitle: {
+    color: '#667085',
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
   content: {
     alignSelf: 'center',
     gap: 16,
@@ -372,6 +587,26 @@ const styles = StyleSheet.create({
   topBarCopy: { flex: 1 },
   eyebrow: { color: '#667085', fontSize: 11, fontWeight: '700', letterSpacing: 1.3 },
   pageTitle: { color: '#101828', fontSize: 25, fontWeight: '800', marginTop: 2 },
+  warningBanner: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 4,
+    padding: 14,
+  },
+  warningBannerTitle: { color: '#92400E', fontSize: 13, fontWeight: '800' },
+  warningBannerText: { color: '#78350F', fontSize: 12, lineHeight: 18 },
+  errorBanner: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 4,
+    padding: 14,
+  },
+  errorBannerTitle: { color: '#991B1B', fontSize: 13, fontWeight: '800' },
+  errorBannerText: { color: '#7F1D1D', fontSize: 12, lineHeight: 18 },
   heroCard: {
     backgroundColor: '#172E73',
     borderRadius: 24,
@@ -396,12 +631,12 @@ const styles = StyleSheet.create({
   sessionCode: { color: '#B9C8FF', fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
   courseTitle: {
     color: '#FFFFFF',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '800',
-    lineHeight: 31,
-    marginTop: 22,
+    lineHeight: 29,
+    marginTop: 18,
   },
-  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 22 },
+  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 20 },
   detailItem: {
     backgroundColor: 'rgba(255,255,255,0.1)',
     borderColor: 'rgba(255,255,255,0.14)',
@@ -445,7 +680,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   sectionEyebrow: { color: '#2D5BDB', fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
-  sectionTitle: { color: '#101828', fontSize: 21, fontWeight: '800', marginTop: 3 },
+  sectionTitle: { color: '#101828', fontSize: 20, fontWeight: '800', marginTop: 3 },
   studentNim: { color: '#667085', fontSize: 12, fontWeight: '700' },
   formCard: {
     backgroundColor: '#FFFFFF',
@@ -462,7 +697,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     color: '#101828',
     fontSize: 15,
-    minHeight: 104,
+    minHeight: 96,
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
@@ -510,16 +745,60 @@ const styles = StyleSheet.create({
   primaryButtonPressed: { backgroundColor: '#2048B5', transform: [{ scale: 0.99 }] },
   primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
   primaryButtonTextDisabled: { color: '#98A2B3' },
+  permissionPromptCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4E7EC',
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 12,
+    padding: 17,
+  },
+  permissionPromptText: { color: '#475467', fontSize: 13, lineHeight: 20 },
+  permissionActionBtn: {
+    alignItems: 'center',
+    backgroundColor: '#EFF4FF',
+    borderColor: '#B2CCFF',
+    borderRadius: 13,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingHorizontal: 16,
+  },
+  permissionActionBtnText: { color: '#1D4ED8', fontSize: 14, fontWeight: '800' },
+  permissionStatusCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4E7EC',
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 12,
+    padding: 17,
+  },
+  permissionStatusHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  permissionStatusTitle: { color: '#101828', fontSize: 15, fontWeight: '800' },
+  permissionBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+  },
+  permissionBadgeText: { fontSize: 11, fontWeight: '800' },
+  permissionReasonLabel: { color: '#667085', fontSize: 12, fontWeight: '700' },
+  permissionReasonText: { color: '#101828', fontSize: 14, fontStyle: 'italic', lineHeight: 20 },
+  bottomActionsRow: { flexDirection: 'row', gap: 10 },
+  flexButton: { flex: 1 },
   secondaryButton: {
     alignItems: 'center',
     borderColor: '#C7D3F7',
     borderRadius: 15,
     borderWidth: 1,
     justifyContent: 'center',
-    minHeight: 52,
-    paddingHorizontal: 18,
+    minHeight: 50,
+    paddingHorizontal: 14,
   },
-  secondaryButtonText: { color: '#244AA5', fontSize: 14, fontWeight: '800' },
+  secondaryButtonText: { color: '#244AA5', fontSize: 13, fontWeight: '800', textAlign: 'center' },
   pressed: { opacity: 0.72 },
   modalBackdrop: {
     alignItems: 'center',
@@ -568,7 +847,7 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   modalTimeLabel: { color: '#667085', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-  modalTime: { color: '#17233C', fontSize: 20, fontWeight: '900', marginTop: 3 },
+  modalTime: { color: '#17233C', fontSize: 18, fontWeight: '900', marginTop: 3 },
   modalLinkButton: { alignItems: 'center', paddingTop: 16 },
   modalLinkText: { color: '#2D5BDB', fontSize: 14, fontWeight: '800' },
 });

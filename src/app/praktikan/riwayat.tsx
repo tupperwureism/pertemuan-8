@@ -1,65 +1,118 @@
-import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-type HistoryItem = {
-  id: string;
-  sessionId: string;
-  namaPraktikum: string;
-  kelas: string;
-  waktuHadir: string;
-  catatan: string;
-};
+import { useAuth } from '@/context/AuthContext';
+import { getClassById, subscribeMyAttendances } from '@/services/attendanceService';
+import { friendlyError } from '@/services/authService';
+import { subscribeSessions } from '@/services/sessionService';
+import type {
+  AttendanceDoc,
+  ClassDoc,
+  FirestoreTimestamp,
+  SessionDoc,
+} from '@/types/firebase';
 
-const BUDI_HISTORY: HistoryItem[] = [
-  {
-    id: 'abs-2',
-    sessionId: 'sesi-3',
-    namaPraktikum: 'Basis Data Lanjut - Modul 1',
-    kelas: 'IF-B',
-    waktuHadir: '13:02 WIB',
-    catatan: 'Hadir',
-  },
-];
+function formatAttendedTime(ts: FirestoreTimestamp | null | undefined): string {
+  if (!ts) return 'Baru saja';
+  return `${new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(ts.toDate())} WIB`;
+}
 
-function firstParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return 'PR';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
 }
 
 export default function AttendanceHistoryScreen() {
-  const params = useLocalSearchParams<{
-    userId?: string | string[];
-    sessionId?: string | string[];
-    namaPraktikum?: string | string[];
-    kelas?: string | string[];
-    waktuHadir?: string | string[];
-    catatan?: string | string[];
-  }>();
+  const { uid, profile, status: authStatus } = useAuth();
 
-  const userId = firstParam(params.userId) ?? 'prk-1';
-  const isEmptyProfile = userId === 'prk-2';
+  const [attendances, setAttendances] = useState<AttendanceDoc[]>([]);
+  const [sessionMap, setSessionMap] = useState<Record<string, SessionDoc>>({});
+  const [classMap, setClassMap] = useState<Record<string, ClassDoc>>({});
+  const [loading, setLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const history = useMemo(() => {
-    if (isEmptyProfile) return [];
-
-    const result = [...BUDI_HISTORY];
-    const sessionId = firstParam(params.sessionId);
-    const waktuHadir = firstParam(params.waktuHadir);
-
-    if (sessionId && waktuHadir && !result.some((item) => item.sessionId === sessionId)) {
-      result.unshift({
-        id: `local-${sessionId}`,
-        sessionId,
-        namaPraktikum: firstParam(params.namaPraktikum) ?? 'Sesi praktikum',
-        kelas: firstParam(params.kelas) ?? 'IF-A',
-        waktuHadir,
-        catatan: firstParam(params.catatan) ?? 'Hadir',
-      });
+  useEffect(() => {
+    if (!uid) {
+      return;
     }
 
-    return result;
-  }, [isEmptyProfile, params.catatan, params.kelas, params.namaPraktikum, params.sessionId, params.waktuHadir]);
+    const unsubAttendances = subscribeMyAttendances(
+      uid,
+      (items) => {
+        setAttendances(items);
+        setErrorMessage(null);
+        setLoading(false);
+      },
+      (err) => {
+        setErrorMessage(friendlyError(err));
+        setLoading(false);
+      },
+    );
+
+    const unsubSessions = subscribeSessions(
+      (sessions) => {
+        const nextMap: Record<string, SessionDoc> = {};
+        sessions.forEach((s) => {
+          nextMap[s.id] = s;
+        });
+        setSessionMap(nextMap);
+      },
+      () => {
+        // Jangan gagalkan layar riwayat bila metadata sesi belum termuat
+      },
+    );
+
+    return () => {
+      unsubAttendances();
+      unsubSessions();
+    };
+  }, [uid]);
+
+  // Ambil detail kelas untuk classId yang muncul di daftar presensi
+  useEffect(() => {
+    if (!uid || attendances.length === 0) return;
+    let cancelled = false;
+    const uniqueClassIds = Array.from(new Set(attendances.map((a) => a.classId).filter(Boolean)));
+
+    void Promise.all(
+      uniqueClassIds.map(async (cid) => {
+        const cls = await getClassById(cid).catch(() => null);
+        return [cid, cls] as const;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      const next: Record<string, ClassDoc> = {};
+      entries.forEach(([cid, cls]) => {
+        if (cls) next[cid] = cls;
+      });
+      setClassMap((prev) => ({ ...prev, ...next }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attendances, uid]);
+
+  const displayName = profile?.nama ?? (uid ? 'Praktikan' : 'Belum Login');
+  const displayNim = profile?.nomorInduk ?? (uid ? uid.slice(0, 8) : '-');
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -82,34 +135,69 @@ export default function AttendanceHistoryScreen() {
 
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{isEmptyProfile ? 'SA' : 'BS'}</Text>
+            <Text style={styles.avatarText}>{getInitials(displayName)}</Text>
           </View>
           <View style={styles.profileCopy}>
-            <Text style={styles.profileName}>{isEmptyProfile ? 'Siti Aminah' : 'Budi Santoso'}</Text>
-            <Text style={styles.profileNim}>{isEmptyProfile ? '2301002' : '2301001'} · Praktikan</Text>
+            <Text style={styles.profileName}>{displayName}</Text>
+            <Text style={styles.profileNim}>{displayNim} · Praktikan</Text>
           </View>
           <View style={styles.totalBadge}>
-            <Text style={styles.totalNumber}>{history.length}</Text>
+            <Text style={styles.totalNumber}>{attendances.length}</Text>
             <Text style={styles.totalLabel}>Hadir</Text>
           </View>
         </View>
 
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push('/praktikan/izin' as never)}
+          style={({ pressed }) => [styles.permissionSwitchBtn, pressed && styles.pressed]}>
+          <Text style={styles.permissionSwitchText}>Lihat riwayat & status pengajuan izin saya →</Text>
+        </Pressable>
+
+        {errorMessage ? (
+          <View style={styles.errorCard}>
+            <Text style={styles.errorTitle}>Gagal memuat riwayat</Text>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.sectionHeader}>
           <View>
-            <Text style={styles.sectionEyebrow}>RIWAYAT</Text>
+            <Text style={styles.sectionEyebrow}>RIWAYAT REAL-TIME</Text>
             <Text style={styles.sectionTitle}>Presensi tercatat</Text>
           </View>
-          <Text style={styles.itemCount}>{history.length} catatan</Text>
+          <Text style={styles.itemCount}>{attendances.length} catatan</Text>
         </View>
 
-        {history.length === 0 ? (
+        {authStatus === 'loading' || (Boolean(uid) && loading) ? (
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="large" color="#2D5BDB" />
+            <Text style={styles.loadingText}>Memuat catatan kehadiran dari Firestore...</Text>
+          </View>
+        ) : !uid ? (
+          <View style={styles.emptyCard}>
+            <View style={styles.emptyIcon}>
+              <Text style={styles.emptyIconText}>○</Text>
+            </View>
+            <Text style={styles.emptyTitle}>Anda belum login</Text>
+            <Text style={styles.emptyText}>
+              Silakan masuk menggunakan akun praktikan untuk melihat riwayat kehadiran yang tersimpan di Cloud Firestore.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.replace('/')}
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
+              <Text style={styles.primaryButtonText}>Ke halaman utama</Text>
+            </Pressable>
+          </View>
+        ) : attendances.length === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIcon}>
               <Text style={styles.emptyIconText}>○</Text>
             </View>
             <Text style={styles.emptyTitle}>Belum ada catatan kehadiran</Text>
             <Text style={styles.emptyText}>
-              Kehadiran yang berhasil dicatat akan muncul di halaman ini.
+              Kehadiran yang berhasil dicatat pada sesi yang sedang dibuka akan muncul secara real-time di halaman ini.
             </Text>
             <Pressable
               accessibilityRole="button"
@@ -120,47 +208,54 @@ export default function AttendanceHistoryScreen() {
           </View>
         ) : (
           <View style={styles.list}>
-            {history.map((item, index) => (
-              <View key={item.id} style={styles.historyCard}>
-                <View style={styles.timelineColumn}>
-                  <View style={styles.checkCircle}>
-                    <Text style={styles.checkText}>✓</Text>
+            {attendances.map((item, index) => {
+              const sess = sessionMap[item.sessionId];
+              const cls = classMap[item.classId];
+              const title = cls
+                ? `${cls.mataPraktikum}${sess ? ` - ${sess.judul}` : ''}`
+                : (sess?.judul ?? `Sesi ${item.sessionId}`);
+              const kelasLabel = cls?.kodeKelas ?? cls?.nama ?? item.classId;
+
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => router.push(`/praktikan/${item.sessionId}` as never)}
+                  style={({ pressed }) => [styles.historyCard, pressed && styles.pressed]}>
+                  <View style={styles.timelineColumn}>
+                    <View style={styles.checkCircle}>
+                      <Text style={styles.checkText}>✓</Text>
+                    </View>
+                    {index < attendances.length - 1 ? <View style={styles.timelineLine} /> : null}
                   </View>
-                  {index < history.length - 1 ? <View style={styles.timelineLine} /> : null}
-                </View>
-                <View style={styles.historyContent}>
-                  <View style={styles.historyHeader}>
-                    <Text style={styles.historyTitle}>{item.namaPraktikum}</Text>
-                    <View style={styles.presentBadge}>
-                      <Text style={styles.presentBadgeText}>Hadir</Text>
+                  <View style={styles.historyContent}>
+                    <View style={styles.historyHeader}>
+                      <Text style={styles.historyTitle}>{title}</Text>
+                      <View style={styles.presentBadge}>
+                        <Text style={styles.presentBadgeText}>Hadir</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.historyMeta}>
+                      {kelasLabel} · {item.sessionId.toUpperCase()}
+                    </Text>
+                    <View style={styles.divider} />
+                    <View style={styles.historyFooter}>
+                      <View>
+                        <Text style={styles.footerLabel}>Waktu tercatat</Text>
+                        <Text style={styles.footerValue}>{formatAttendedTime(item.attendedAt)}</Text>
+                      </View>
+                      <View style={styles.noteBlock}>
+                        <Text style={styles.footerLabel}>Catatan</Text>
+                        <Text style={styles.noteValue} numberOfLines={2}>
+                          {item.catatan || 'Hadir'}
+                        </Text>
+                      </View>
                     </View>
                   </View>
-                  <Text style={styles.historyMeta}>{item.kelas} · {item.sessionId.toUpperCase()}</Text>
-                  <View style={styles.divider} />
-                  <View style={styles.historyFooter}>
-                    <View>
-                      <Text style={styles.footerLabel}>Waktu tercatat</Text>
-                      <Text style={styles.footerValue}>{item.waktuHadir}</Text>
-                    </View>
-                    <View style={styles.noteBlock}>
-                      <Text style={styles.footerLabel}>Catatan</Text>
-                      <Text style={styles.noteValue} numberOfLines={2}>{item.catatan}</Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-            ))}
+                </Pressable>
+              );
+            })}
           </View>
         )}
-
-        {history.length > 0 ? (
-          <View style={styles.helperCard}>
-            <Text style={styles.helperTitle}>Data lokal sementara</Text>
-            <Text style={styles.helperText}>
-              Riwayat ini menggunakan data dummy dan akan kembali ke kondisi awal ketika aplikasi dimuat ulang.
-            </Text>
-          </View>
-        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -221,6 +316,35 @@ const styles = StyleSheet.create({
   },
   totalNumber: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
   totalLabel: { color: '#B9C8FF', fontSize: 10, fontWeight: '700' },
+  permissionSwitchBtn: {
+    alignItems: 'center',
+    backgroundColor: '#EEF4FF',
+    borderColor: '#C7D7FE',
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+  },
+  permissionSwitchText: { color: '#1D4ED8', fontSize: 13, fontWeight: '800' },
+  errorCard: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
+  },
+  errorTitle: { color: '#991B1B', fontSize: 13, fontWeight: '800' },
+  errorText: { color: '#7F1D1D', fontSize: 12, lineHeight: 18, marginTop: 4 },
+  loadingCard: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E4E7EC',
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 12,
+    paddingVertical: 40,
+  },
+  loadingText: { color: '#475467', fontSize: 13, fontWeight: '600' },
   sectionHeader: {
     alignItems: 'flex-end',
     flexDirection: 'row',
@@ -259,7 +383,7 @@ const styles = StyleSheet.create({
   divider: { backgroundColor: '#EAECF0', height: 1, marginVertical: 13 },
   historyFooter: { flexDirection: 'row', gap: 16 },
   footerLabel: { color: '#98A2B3', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-  footerValue: { color: '#17233C', fontSize: 14, fontWeight: '800', marginTop: 4 },
+  footerValue: { color: '#17233C', fontSize: 13, fontWeight: '800', marginTop: 4 },
   noteBlock: { flex: 1 },
   noteValue: { color: '#475467', fontSize: 12, lineHeight: 17, marginTop: 4 },
   emptyCard: {
@@ -294,14 +418,5 @@ const styles = StyleSheet.create({
   },
   primaryButtonPressed: { backgroundColor: '#2048B5', transform: [{ scale: 0.99 }] },
   primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  helperCard: {
-    backgroundColor: '#EEF4FF',
-    borderColor: '#C8D7FF',
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 15,
-  },
-  helperTitle: { color: '#183B8F', fontSize: 12, fontWeight: '800' },
-  helperText: { color: '#475467', fontSize: 12, lineHeight: 18, marginTop: 4 },
   pressed: { opacity: 0.72 },
 });

@@ -41,3 +41,10 @@ example
 # generated native folders
 /ios
 /android
+
+# Firebase (google-services.json: commit atau EAS file secret diputuskan PM)
+GoogleService-Info.plist
+.firebase/
+firebase-debug.log*
+firestore-debug.log
+google-services.json

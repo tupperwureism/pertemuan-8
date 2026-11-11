@@ -1,0 +1,266 @@
+rules_version = '2';
+
+// Sprint 2 - Security Rules (milik Programmer 1). Deny-by-default: koleksi tanpa match eksplisit ditolak.
+// Role dibaca dari users/{uid}.role (di-provisikan PM untuk asisten); client tidak dapat menaikkan role.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------ Helper
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function isAsisten() {
+      return signedIn()
+        && exists(profilePath(request.auth.uid))
+        && get(profilePath(request.auth.uid)).data.role == 'asisten';
+    }
+
+    function memberPath(classId) {
+      return /databases/$(database)/documents/classMembers/$(classId + '_' + request.auth.uid);
+    }
+
+    function isMember(classId) {
+      return signedIn() && exists(memberPath(classId));
+    }
+
+    function sessionData(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function classExists(classId) {
+      return exists(/databases/$(database)/documents/classes/$(classId));
+    }
+
+    function shortText(value, maxLen) {
+      return value is string && value.size() >= 1 && value.size() <= maxLen;
+    }
+
+    function validTransition(oldStatus, newStatus) {
+      return oldStatus == newStatus
+        || (oldStatus == 'BELUM_DIBUKA' && newStatus == 'DIBUKA')
+        || (oldStatus == 'DIBUKA' && newStatus == 'DITUTUP');
+    }
+
+    // ------------------------------------------------------------- users
+
+    match /users/{uid} {
+      allow get: if isOwner(uid) || isAsisten();
+      allow list: if isAsisten();
+
+      // Registrasi publik: SELALU praktikan, ID = UID, email = email token Auth.
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(
+             ['uid', 'email', 'nama', 'nomorInduk', 'role', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(
+             ['uid', 'email', 'nama', 'nomorInduk', 'role', 'createdAt', 'updatedAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.role == 'praktikan'
+        && request.resource.data.email == request.auth.token.email
+        && shortText(request.resource.data.nama, 100)
+        && shortText(request.resource.data.nomorInduk, 30)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // Pemilik hanya boleh mengubah nama/nomorInduk; role, uid, email, createdAt terkunci.
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['nama', 'nomorInduk', 'updatedAt'])
+        && shortText(request.resource.data.nama, 100)
+        && shortText(request.resource.data.nomorInduk, 30)
+        && request.resource.data.updatedAt == request.time;
+
+      allow delete: if false;
+    }
+
+    // ----------------------------------------------------------- classes
+
+    function validClassFields(data) {
+      return data.keys().hasOnly(
+               ['nama', 'mataPraktikum', 'kodeKelas', 'assistantIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(
+               ['nama', 'mataPraktikum', 'kodeKelas', 'assistantIds', 'createdAt', 'updatedAt'])
+        && shortText(data.nama, 100)
+        && shortText(data.mataPraktikum, 100)
+        && shortText(data.kodeKelas, 30)
+        && data.assistantIds is list
+        && data.assistantIds.size() >= 1
+        && data.updatedAt == request.time;
+    }
+
+    match /classes/{classId} {
+      allow read: if isAsisten() || isMember(classId);
+
+      allow create: if isAsisten()
+        && validClassFields(request.resource.data)
+        && request.auth.uid in request.resource.data.assistantIds
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isAsisten()
+        && validClassFields(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if isAsisten();
+    }
+
+    // ------------------------------------------------------ classMembers
+
+    match /classMembers/{memberId} {
+      allow read: if isAsisten()
+        || (signedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isAsisten()
+        && request.resource.data.keys().hasOnly(['classId', 'uid', 'role', 'joinedAt'])
+        && request.resource.data.keys().hasAll(['classId', 'uid', 'role', 'joinedAt'])
+        && memberId == request.resource.data.classId + '_' + request.resource.data.uid
+        && request.resource.data.role in ['praktikan', 'asisten']
+        && classExists(request.resource.data.classId)
+        && exists(profilePath(request.resource.data.uid))
+        && request.resource.data.joinedAt == request.time;
+
+      allow update: if false;
+      allow delete: if isAsisten();
+    }
+
+    // ---------------------------------------------------------- sessions
+
+    function validSessionFields(data) {
+      return data.keys().hasOnly(
+               ['classId', 'judul', 'ruangan', 'startsAt', 'endsAt', 'status', 'catatan',
+                'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(
+               ['classId', 'judul', 'ruangan', 'startsAt', 'endsAt', 'status', 'catatan',
+                'createdBy', 'createdAt', 'updatedAt'])
+        && shortText(data.judul, 150)
+        && shortText(data.ruangan, 100)
+        && data.catatan is string && data.catatan.size() <= 500
+        && data.startsAt is timestamp
+        && data.endsAt is timestamp
+        && data.endsAt > data.startsAt
+        && data.status in ['BELUM_DIBUKA', 'DIBUKA', 'DITUTUP']
+        && data.updatedAt == request.time;
+    }
+
+    match /sessions/{sessionId} {
+      allow read: if isAsisten() || isMember(resource.data.classId);
+
+      allow create: if isAsisten()
+        && validSessionFields(request.resource.data)
+        && request.resource.data.status == 'BELUM_DIBUKA'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && classExists(request.resource.data.classId);
+
+      // Status hanya maju: BELUM_DIBUKA -> DIBUKA -> DITUTUP. Identitas sesi terkunci.
+      allow update: if isAsisten()
+        && validSessionFields(request.resource.data)
+        && request.resource.data.classId == resource.data.classId
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validTransition(resource.data.status, request.resource.data.status);
+
+      allow delete: if isAsisten();
+    }
+
+    // ------------------------------------------------------- attendances
+    // ID = sessionId_uid. Praktikan create sekali ketika sesi DIBUKA; tidak ada update.
+    // Rekap oleh asisten membaca seluruh dokumen; praktikan hanya dokumen miliknya.
+
+    match /attendances/{attendanceId} {
+      allow read: if isAsisten()
+        || (signedIn() && resource.data.praktikanUid == request.auth.uid);
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(
+             ['sessionId', 'classId', 'praktikanUid', 'attendedAt', 'catatan'])
+        && request.resource.data.keys().hasAll(
+             ['sessionId', 'classId', 'praktikanUid', 'attendedAt'])
+        && request.resource.data.praktikanUid == request.auth.uid
+        && attendanceId == request.resource.data.sessionId + '_' + request.auth.uid
+        && request.resource.data.attendedAt == request.time
+        && (!('catatan' in request.resource.data)
+            || (request.resource.data.catatan is string
+                && request.resource.data.catatan.size() <= 500))
+        && sessionData(request.resource.data.sessionId).status == 'DIBUKA'
+        && sessionData(request.resource.data.sessionId).classId == request.resource.data.classId
+        && isMember(request.resource.data.classId);
+
+      allow update: if false;
+      // Asisten boleh menghapus hanya untuk pembersihan data (mis. sesi dihapus).
+      allow delete: if isAsisten();
+    }
+
+    // ------------------------------------------------------- permissions
+    // ID = sessionId_uid. Praktikan create/baca miliknya dan hanya mengisi hasil klasifikasi AI;
+    // keputusan APPROVED/REJECTED hanya oleh asisten. (Field aiRaw opsional untuk debug Programmer 2.)
+
+    function validAiFields(data) {
+      return data.aiStatus in ['PENDING', 'SUCCEEDED', 'FAILED']
+        && (data.get('aiLabel', null) == null
+            || (data.aiLabel is string && data.aiLabel.size() <= 100))
+        && (data.get('aiConfidence', null) == null
+            || ((data.aiConfidence is number) && data.aiConfidence >= 0 && data.aiConfidence <= 1));
+    }
+
+    match /permissions/{permissionId} {
+      allow read: if isAsisten()
+        || (signedIn() && resource.data.praktikanUid == request.auth.uid);
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(
+             ['sessionId', 'classId', 'praktikanUid', 'alasan', 'aiStatus', 'aiLabel',
+              'aiConfidence', 'status', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(
+             ['sessionId', 'classId', 'praktikanUid', 'alasan', 'aiStatus', 'status',
+              'createdAt', 'updatedAt'])
+        && request.resource.data.praktikanUid == request.auth.uid
+        && permissionId == request.resource.data.sessionId + '_' + request.auth.uid
+        && shortText(request.resource.data.alasan, 1000)
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.aiStatus == 'PENDING'
+        && validAiFields(request.resource.data)
+        && (!('reviewedBy' in request.resource.data) || request.resource.data.reviewedBy == null)
+        && (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt == null)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && sessionData(request.resource.data.sessionId).classId == request.resource.data.classId
+        && isMember(request.resource.data.classId);
+
+      allow update: if
+        // Keputusan asisten: mengubah status + metadata review saja.
+        (isAsisten()
+          && resource.data.status == 'PENDING'
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'reviewedBy', 'reviewedAt', 'updatedAt'])
+          && request.resource.data.status in ['APPROVED', 'REJECTED']
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.reviewedAt == request.time
+          && request.resource.data.updatedAt == request.time)
+        ||
+        // Pemilik: hanya hasil klasifikasi AI (informasi pendukung); status tidak dapat disentuh.
+        (signedIn()
+          && resource.data.praktikanUid == request.auth.uid
+          && resource.data.status == 'PENDING'
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['aiStatus', 'aiLabel', 'aiConfidence', 'aiRaw', 'updatedAt'])
+          && validAiFields(request.resource.data)
+          && request.resource.data.updatedAt == request.time);
+
+      allow delete: if isAsisten();
+    }
+
+    // Deny-by-default untuk path lain.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -78,8 +78,14 @@ export function subscribeVisibleClasses(
   let cancelled = false;
   const perClass = new Map<string, Unsubscribe>();
   const results = new Map<string, ClassDoc>();
+  const delivered = new Set<string>();
+  // Emit setelah semua dokumen kelas mengirim snapshot pertama (hindari daftar kosong palsu).
   const emit = () => {
-    if (!cancelled) callback([...results.values()].sort((a, b) => a.nama.localeCompare(b.nama)));
+    if (cancelled) return;
+    for (const id of perClass.keys()) {
+      if (!delivered.has(id)) return;
+    }
+    callback([...results.values()].sort((a, b) => a.nama.localeCompare(b.nama)));
   };
 
   const stopRoot = onSnapshot(
@@ -92,6 +98,7 @@ export function subscribeVisibleClasses(
           unsub();
           perClass.delete(id);
           results.delete(id);
+          delivered.delete(id);
         }
       }
       ids.forEach((id) => {
@@ -103,6 +110,7 @@ export function subscribeVisibleClasses(
             (classSnap) => {
               if (classSnap.exists()) results.set(id, toClass(classSnap));
               else results.delete(id);
+              delivered.add(id);
               emit();
             },
             (error) => onError(toError(error)),
@@ -119,6 +127,7 @@ export function subscribeVisibleClasses(
     stopRoot();
     perClass.forEach((unsub) => unsub());
     perClass.clear();
+    delivered.clear();
   };
 }
 

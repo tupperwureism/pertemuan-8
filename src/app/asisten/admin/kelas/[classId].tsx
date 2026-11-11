@@ -280,9 +280,9 @@ export default function AdminClassDetailScreen() {
 
       {/* Dialog: ubah kelas */}
       <FormSheet visible={dialog?.type === 'editClass'} title="Ubah Kelas" onClose={() => setDialog(null)}>
-        <FormField label="Nama Kelas" value={classForm.nama} onChangeText={(v) => setClassForm((f) => ({ ...f, nama: v }))} />
-        <FormField label="Mata Praktikum" value={classForm.mataPraktikum} onChangeText={(v) => setClassForm((f) => ({ ...f, mataPraktikum: v }))} />
-        <FormField label="Kode Kelas" value={classForm.kodeKelas} onChangeText={(v) => setClassForm((f) => ({ ...f, kodeKelas: v }))} autoCapitalize="characters" />
+        <FormField label="Nama Kelas" maxLength={100} value={classForm.nama} onChangeText={(v) => setClassForm((f) => ({ ...f, nama: v }))} />
+        <FormField label="Mata Praktikum" maxLength={100} value={classForm.mataPraktikum} onChangeText={(v) => setClassForm((f) => ({ ...f, mataPraktikum: v }))} />
+        <FormField label="Kode Kelas" maxLength={30} value={classForm.kodeKelas} onChangeText={(v) => setClassForm((f) => ({ ...f, kodeKelas: v }))} autoCapitalize="characters" />
         {dialogError && dialog?.type === 'editClass' ? <ErrorBanner message={dialogError} /> : null}
         <PrimaryButton label="Simpan Perubahan" tone="asisten" onPress={saveClass} loading={busy} />
       </FormSheet>
@@ -309,8 +309,8 @@ export default function AdminClassDetailScreen() {
         onClose={() => setDialog(null)}
       >
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetForm}>
-          <FormField label="Judul Sesi" value={sessionForm.judul} onChangeText={(v) => setSessionForm((f) => ({ ...f, judul: v }))} placeholder="Contoh: Modul 1 - React Native Dasar" />
-          <FormField label="Ruangan" value={sessionForm.ruangan} onChangeText={(v) => setSessionForm((f) => ({ ...f, ruangan: v }))} placeholder="Contoh: Lab Mobile 1" />
+          <FormField label="Judul Sesi" maxLength={150} value={sessionForm.judul} onChangeText={(v) => setSessionForm((f) => ({ ...f, judul: v }))} placeholder="Contoh: Modul 1 - React Native Dasar" />
+          <FormField label="Ruangan" maxLength={100} value={sessionForm.ruangan} onChangeText={(v) => setSessionForm((f) => ({ ...f, ruangan: v }))} placeholder="Contoh: Lab Mobile 1" />
           <FormField label="Tanggal (YYYY-MM-DD)" value={sessionForm.tanggal} onChangeText={(v) => setSessionForm((f) => ({ ...f, tanggal: v }))} placeholder="2026-11-12" autoCapitalize="none" keyboardType="numbers-and-punctuation" />
           <View style={styles.row}>
             <View style={styles.flex1}>
@@ -320,7 +320,7 @@ export default function AdminClassDetailScreen() {
               <FormField label="Selesai (HH:mm)" value={sessionForm.selesai} onChangeText={(v) => setSessionForm((f) => ({ ...f, selesai: v }))} placeholder="10:00" autoCapitalize="none" keyboardType="numbers-and-punctuation" />
             </View>
           </View>
-          <FormField label="Catatan (opsional)" value={sessionForm.catatan} onChangeText={(v) => setSessionForm((f) => ({ ...f, catatan: v }))} multiline placeholder="Instruksi untuk praktikan" />
+          <FormField label="Catatan (opsional)" maxLength={500} value={sessionForm.catatan} onChangeText={(v) => setSessionForm((f) => ({ ...f, catatan: v }))} multiline placeholder="Instruksi untuk praktikan" />
           {dialogError && sessionDialog ? <ErrorBanner message={dialogError} /> : null}
           <PrimaryButton
             label={sessionDialog?.session ? 'Simpan Perubahan' : 'Buat Sesi'}

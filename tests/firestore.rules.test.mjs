@@ -1,6 +1,7 @@
 // Uji negatif/positif Security Rules (SRS-14). Dijalankan lewat Firestore Emulator:
 //   npm run test:rules
-// Membutuhkan Java (JDK 21+ untuk firebase-tools terbaru) dan mengunduh emulator saat pertama kali.
+// Membutuhkan Java 17+ dan mengunduh emulator saat pertama kali. Script di-pin ke firebase-tools 14.27.0
+// karena firebase-tools 15 mewajibkan JDK 21; naikkan versinya bersama JDK bila tim sudah memakai JDK 21.
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
 

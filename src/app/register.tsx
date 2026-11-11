@@ -67,9 +67,9 @@ export default function RegisterScreen() {
           </View>
 
           <View style={styles.card}>
-            <FormField label="Nama Lengkap" value={form.nama} onChangeText={set('nama')} error={errors.nama} placeholder="Nama lengkap" autoComplete="name" />
+            <FormField label="Nama Lengkap" maxLength={100} value={form.nama} onChangeText={set('nama')} error={errors.nama} placeholder="Nama lengkap" autoComplete="name" />
             <FormField
-              label="Nomor Induk Mahasiswa (NIM)"
+              label="Nomor Induk Mahasiswa (NIM)" maxLength={30}
               value={form.nomorInduk}
               onChangeText={set('nomorInduk')}
               error={errors.nomorInduk}

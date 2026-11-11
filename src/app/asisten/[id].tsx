@@ -209,6 +209,7 @@ export default function AsistenSessionDetailScreen() {
             <TextInput
               accessibilityLabel="Catatan / Instruksi Praktikum"
               editable={!isDitutup}
+              maxLength={500}
               multiline
               numberOfLines={3}
               onBlur={() => setIsInputFocused(false)}

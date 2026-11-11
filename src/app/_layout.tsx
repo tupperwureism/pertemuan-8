@@ -12,13 +12,15 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
  * - ready          -> aplikasi; guard role ada di asisten/_layout.tsx dan praktikan/_layout.tsx
  */
 function RootNavigator() {
-  const { status } = useAuth();
+  const { status, initializing, registering } = useAuth();
 
-  if (status === 'loading') {
+  // Loader layar penuh hanya saat cold start dan saat profil dimuat setelah login. Selama registrasi,
+  // layar daftar tetap tampil agar kegagalan (mis. rules menolak) dapat ditampilkan ke pengguna.
+  if (initializing || (status === 'loading' && !registering)) {
     return <LoadingState label="Memeriksa sesi login…" />;
   }
 
-  const signedOut = status === 'signedOut';
+  const signedOut = status === 'signedOut' || (status === 'loading' && registering);
   const needsAttention = status === 'profileMissing' || status === 'profileError';
   const ready = status === 'ready';
 

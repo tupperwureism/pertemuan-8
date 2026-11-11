@@ -64,15 +64,23 @@ export function subscribeSessions(
   let stopRoot: Unsubscribe | null = null;
   const perClass = new Map<string, Unsubscribe>();
   const results = new Map<string, SessionDoc[]>();
+  const delivered = new Set<string>();
 
+  // Emit hanya setelah SETIAP listener kelas mengirim snapshot pertamanya, agar UI tidak
+  // sempat menampilkan keadaan kosong palsu sebelum data tiba.
   const emit = () => {
-    if (!cancelled) callback(sortByStart([...results.values()].flat()));
+    if (cancelled) return;
+    for (const classId of perClass.keys()) {
+      if (!delivered.has(classId)) return;
+    }
+    callback(sortByStart([...results.values()].flat()));
   };
 
   const clearClassListeners = () => {
     perClass.forEach((unsub) => unsub());
     perClass.clear();
     results.clear();
+    delivered.clear();
   };
 
   const start = async () => {
@@ -106,18 +114,19 @@ export function subscribeSessions(
               unsub();
               perClass.delete(classId);
               results.delete(classId);
+              delivered.delete(classId);
             }
           }
           // Mulai listener untuk kelas baru.
           classIds.forEach((classId) => {
             if (perClass.has(classId)) return;
-            results.set(classId, []);
             perClass.set(
               classId,
               onSnapshot(
                 query(sessionsCol(), where('classId', '==', classId)),
                 (snap) => {
                   results.set(classId, snap.docs.map(toSession));
+                  delivered.add(classId);
                   emit();
                 },
                 (error) => onError(toError(error)),

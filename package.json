@@ -47,7 +47,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test:rules": "npx firebase-tools@15.35.0 emulators:exec --only firestore --project demo-pertemuan-8 \"node --test tests/firestore.rules.test.mjs\""
+    "test:rules": "npx --yes firebase-tools@14.27.0 emulators:exec --only firestore --project demo-pertemuan-8 \"node --test tests/firestore.rules.test.mjs\""
   },
   "private": true
 }

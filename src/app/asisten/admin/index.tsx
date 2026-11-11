@@ -104,9 +104,9 @@ export default function AdminClassesScreen() {
       {renderBody()}
 
       <FormSheet visible={formOpen} title="Tambah Kelas" onClose={() => setFormOpen(false)}>
-        <FormField label="Nama Kelas" value={form.nama} onChangeText={(v) => setForm((f) => ({ ...f, nama: v }))} placeholder="Contoh: Informatika A" />
-        <FormField label="Mata Praktikum" value={form.mataPraktikum} onChangeText={(v) => setForm((f) => ({ ...f, mataPraktikum: v }))} placeholder="Contoh: Pemrograman Bergerak" />
-        <FormField label="Kode Kelas" value={form.kodeKelas} onChangeText={(v) => setForm((f) => ({ ...f, kodeKelas: v }))} placeholder="Contoh: IF-A" autoCapitalize="characters" />
+        <FormField label="Nama Kelas" maxLength={100} value={form.nama} onChangeText={(v) => setForm((f) => ({ ...f, nama: v }))} placeholder="Contoh: Informatika A" />
+        <FormField label="Mata Praktikum" maxLength={100} value={form.mataPraktikum} onChangeText={(v) => setForm((f) => ({ ...f, mataPraktikum: v }))} placeholder="Contoh: Pemrograman Bergerak" />
+        <FormField label="Kode Kelas" maxLength={30} value={form.kodeKelas} onChangeText={(v) => setForm((f) => ({ ...f, kodeKelas: v }))} placeholder="Contoh: IF-A" autoCapitalize="characters" />
         {formError ? <ErrorBanner message={formError} /> : null}
         <PrimaryButton label="Simpan Kelas" tone="asisten" onPress={handleCreate} loading={saving} />
       </FormSheet>

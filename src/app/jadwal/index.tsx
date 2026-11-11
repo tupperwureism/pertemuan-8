@@ -1,108 +1,73 @@
-import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
-import {
-  FlatList,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { router, type Href } from 'expo-router';
+import React, { useMemo, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import {
-  DUMMY_SESSIONS,
-  DUMMY_USERS,
-  PraktikumSession,
-  SessionStatus,
-  UserProfile,
-  UserRole,
-} from '@/data/dummyData';
+import { ConfirmSheet, EmptyState, ErrorState, LoadingState } from '@/components/screen-kit';
+import { useAuth } from '@/context/AuthContext';
+import { useSessions, useVisibleClasses } from '@/hooks/use-firestore-data';
+import { formatSessionTime } from '@/lib/format';
+import type { SessionDoc, SessionStatus } from '@/types/firebase';
 
 type FilterType = 'SEMUA' | SessionStatus;
 
+const FILTER_LABEL: Record<FilterType, string> = {
+  SEMUA: 'semua',
+  DIBUKA: 'dibuka',
+  BELUM_DIBUKA: 'belum dibuka',
+  DITUTUP: 'ditutup',
+};
+
 export default function JadwalPraktikumScreen() {
-  const params = useLocalSearchParams<{
-    role?: string;
-    userId?: string;
-    nama?: string;
-    nomorInduk?: string;
-  }>();
+  // Identitas hanya dari Firebase Auth + profil Firestore, bukan dari route param.
+  const { profile, role, signOut } = useAuth();
+  const activeRole = role ?? 'praktikan';
 
-  // Active user state initialized from route params or fallback to first dummy user
-  const initialRole: UserRole =
-    params.role === 'asisten' || params.role === 'praktikan'
-      ? params.role
-      : 'praktikan';
+  const { data: sessions, loading, error, retry } = useSessions();
+  const { data: classes } = useVisibleClasses(role);
 
-  const [activeRole, setActiveRole] = useState<UserRole>(initialRole);
-  const [activeUserId, setActiveUserId] = useState<string>(
-    params.userId || (initialRole === 'asisten' ? 'ast-01' : 'prk-1')
-  );
-  const [activeNama, setActiveNama] = useState<string>(
-    params.nama || (initialRole === 'asisten' ? 'Raka Pratama' : 'Budi Santoso')
-  );
-  const [activeNomorInduk, setActiveNomorInduk] = useState<string>(
-    params.nomorInduk || (initialRole === 'asisten' ? 'AST-01' : '2301001')
-  );
-
-  // State Filter for sessions (SRS-02)
   const [selectedFilter, setSelectedFilter] = useState<FilterType>('SEMUA');
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  // Quick switch modal state
-  const [isSwitchModalVisible, setIsSwitchModalVisible] = useState<boolean>(false);
+  const classLabel = useMemo(() => {
+    const map: Record<string, string> = {};
+    (classes ?? []).forEach((c) => {
+      map[c.id] = c.kodeKelas || c.nama;
+    });
+    return map;
+  }, [classes]);
 
-  // Quick switch user profile handler
-  const handleSwitchProfile = (user: UserProfile) => {
-    setActiveRole(user.role);
-    setActiveUserId(user.id);
-    setActiveNama(user.nama);
-    setActiveNomorInduk(user.nomorInduk);
-    setIsSwitchModalVisible(false);
-  };
+  const allSessions = useMemo(() => sessions ?? [], [sessions]);
 
-  // Filter sessions based on state filter
-  const filteredSessions = DUMMY_SESSIONS.filter((session) => {
-    if (selectedFilter === 'SEMUA') return true;
-    return session.status === selectedFilter;
-  });
+  const filteredSessions = useMemo(
+    () => allSessions.filter((s) => selectedFilter === 'SEMUA' || s.status === selectedFilter),
+    [allSessions, selectedFilter],
+  );
 
-  // Calculate counts for filters
   const counts = {
-    SEMUA: DUMMY_SESSIONS.length,
-    DIBUKA: DUMMY_SESSIONS.filter((s) => s.status === 'DIBUKA').length,
-    BELUM_DIBUKA: DUMMY_SESSIONS.filter((s) => s.status === 'BELUM_DIBUKA').length,
-    DITUTUP: DUMMY_SESSIONS.filter((s) => s.status === 'DITUTUP').length,
+    SEMUA: allSessions.length,
+    DIBUKA: allSessions.filter((s) => s.status === 'DIBUKA').length,
+    BELUM_DIBUKA: allSessions.filter((s) => s.status === 'BELUM_DIBUKA').length,
+    DITUTUP: allSessions.filter((s) => s.status === 'DITUTUP').length,
   };
 
-  // Navigate to session detail based on active role
-  const handleSessionPress = (session: PraktikumSession) => {
-    if (activeRole === 'asisten') {
-      // Programmer 2 domain: /asisten/[id]
-      router.push({
-        pathname: `/asisten/${session.id}` as any,
-        params: {
-          role: activeRole,
-          userId: activeUserId,
-          nama: activeNama,
-          nomorInduk: activeNomorInduk,
-        },
-      });
-    } else {
-      // Programmer 3 domain: /praktikan/[id]
-      router.push({
-        pathname: `/praktikan/${session.id}` as any,
-        params: {
-          role: activeRole,
-          userId: activeUserId,
-          nama: activeNama,
-          nomorInduk: activeNomorInduk,
-        },
-      });
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await signOut();
+    } finally {
+      // Setelah signOut, Stack.Protected memindahkan pengguna ke /login.
+      setLoggingOut(false);
+      setConfirmLogout(false);
     }
   };
 
-  // Helper for status badge styling (SRS-02: Belum Dibuka abu-abu, Dibuka hijau, Ditutup merah)
+  // Navigasi per role. Tidak ada identitas yang dikirim lewat param; layar tujuan memakai UID auth.
+  const handleSessionPress = (session: SessionDoc) => {
+    router.push((activeRole === 'asisten' ? `/asisten/${session.id}` : `/praktikan/${session.id}`) as Href);
+  };
+
   const renderStatusBadge = (status: SessionStatus) => {
     switch (status) {
       case 'DIBUKA':
@@ -116,9 +81,7 @@ export default function JadwalPraktikumScreen() {
         return (
           <View style={[styles.statusBadge, styles.badgeBelumDibuka]}>
             <View style={[styles.statusDot, styles.dotBelumDibuka]} />
-            <Text style={[styles.statusBadgeText, styles.textBelumDibuka]}>
-              Belum Dibuka
-            </Text>
+            <Text style={[styles.statusBadgeText, styles.textBelumDibuka]}>Belum Dibuka</Text>
           </View>
         );
       case 'DITUTUP':
@@ -131,213 +94,69 @@ export default function JadwalPraktikumScreen() {
     }
   };
 
-  // Render individual session card with Flexbox
-  const renderSessionItem = ({ item }: { item: PraktikumSession }) => {
-    return (
-      <Pressable
-        style={({ pressed }) => [
-          styles.card,
-          pressed && styles.cardPressed,
-        ]}
-        onPress={() => handleSessionPress(item)}
-      >
-        {/* Top Header of Card */}
-        <View style={styles.cardHeader}>
-          <View style={styles.kelasBadge}>
-            <Text style={styles.kelasBadgeText}>Kelas {item.kelas}</Text>
-          </View>
-          {renderStatusBadge(item.status)}
+  const renderSessionItem = ({ item }: { item: SessionDoc }) => (
+    <Pressable
+      accessibilityRole="button"
+      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      onPress={() => handleSessionPress(item)}
+    >
+      <View style={styles.cardHeader}>
+        <View style={styles.kelasBadge}>
+          <Text style={styles.kelasBadgeText}>Kelas {classLabel[item.classId] ?? '…'}</Text>
         </View>
-
-        {/* Title */}
-        <Text style={styles.sessionTitle}>{item.namaPraktikum}</Text>
-
-        {/* Details in Flexbox */}
-        <View style={styles.detailsList}>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailIcon}>🕒</Text>
-            <Text style={styles.detailText}>{item.waktu}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailIcon}>📍</Text>
-            <Text style={styles.detailText}>{item.ruangan}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailIcon}>👥</Text>
-            <Text style={styles.detailText}>
-              {item.daftarHadir.length} Praktikan telah presensi
-            </Text>
-          </View>
-          {item.catatanAsisten ? (
-            <View style={styles.catatanBox}>
-              <Text style={styles.catatanLabel}>📢 Pesan Asisten:</Text>
-              <Text style={styles.catatanText}>{item.catatanAsisten}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        {/* Card Footer / Action Prompt */}
-        <View style={styles.cardFooter}>
-          <Text
-            style={[
-              styles.cardActionText,
-              activeRole === 'asisten'
-                ? styles.cardActionTextAsisten
-                : styles.cardActionTextPraktikan,
-            ]}
-          >
-            {activeRole === 'asisten'
-              ? 'Kelola Sesi (Asisten) →'
-              : 'Presensi Sesi (Praktikan) →'}
-          </Text>
-        </View>
-      </Pressable>
-    );
-  };
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      {/* Top Header Bar */}
-      <View style={styles.topBar}>
-        <Pressable style={styles.backButton} onPress={() => router.push('/')}>
-          <Text style={styles.backButtonText}>← Ganti Akun</Text>
-        </Pressable>
-        <View style={styles.headerTitleGroup}>
-          <Text style={styles.headerTitle}>Jadwal Praktikum</Text>
-          <Text style={styles.headerSubtitle}>SRS-02 • Programmer 1</Text>
-        </View>
-        <Pressable
-          style={styles.switchButton}
-          onPress={() => setIsSwitchModalVisible(true)}
-        >
-          <Text style={styles.switchButtonText}>⚡ Modal</Text>
-        </Pressable>
+        {renderStatusBadge(item.status)}
       </View>
 
-      {/* User Information Banner */}
-      <View style={styles.userBanner}>
-        <View style={styles.userBannerLeft}>
-          <View
-            style={[
-              styles.userRoleBadge,
-              activeRole === 'asisten'
-                ? styles.userRoleBadgeAsisten
-                : styles.userRoleBadgePraktikan,
-            ]}
-          >
-            <Text
-              style={[
-                styles.userRoleBadgeText,
-                activeRole === 'asisten'
-                  ? styles.userRoleBadgeTextAsisten
-                  : styles.userRoleBadgeTextPraktikan,
-              ]}
-            >
-              {activeRole.toUpperCase()}
-            </Text>
-          </View>
-          <View style={styles.userInfoTextContainer}>
-            <Text style={styles.userNameText}>{activeNama}</Text>
-            <Text style={styles.userNimText}>
-              {activeRole === 'praktikan' ? 'NIM' : 'Kode'}: {activeNomorInduk}
-            </Text>
-          </View>
-        </View>
+      <Text style={styles.sessionTitle}>{item.judul}</Text>
 
-        {activeRole === 'praktikan' ? (
-          <Pressable
-            style={styles.riwayatButton}
-            onPress={() =>
-              router.push({
-                pathname: '/praktikan/riwayat' as any,
-                params: {
-                  userId: activeUserId,
-                  nama: activeNama,
-                  nomorInduk: activeNomorInduk,
-                },
-              })
-            }
-          >
-            <Text style={styles.riwayatButtonText}>Riwayat 📜</Text>
-          </Pressable>
+      <View style={styles.detailsList}>
+        <View style={styles.detailRow}>
+          <Text style={styles.detailIcon}>🕒</Text>
+          <Text style={styles.detailText}>{formatSessionTime(item.startsAt, item.endsAt)}</Text>
+        </View>
+        <View style={styles.detailRow}>
+          <Text style={styles.detailIcon}>📍</Text>
+          <Text style={styles.detailText}>{item.ruangan}</Text>
+        </View>
+        {item.catatan ? (
+          <View style={styles.catatanBox}>
+            <Text style={styles.catatanLabel}>📢 Pesan Asisten:</Text>
+            <Text style={styles.catatanText}>{item.catatan}</Text>
+          </View>
         ) : null}
       </View>
 
-      {/* State Filter Chips (SRS-02) */}
-      <View style={styles.filterSection}>
-        <Text style={styles.filterSectionLabel}>FILTER STATUS SESI:</Text>
-        <View style={styles.filterChipsRow}>
-          <Pressable
-            style={[
-              styles.filterChip,
-              selectedFilter === 'SEMUA' && styles.filterChipActiveSemua,
-            ]}
-            onPress={() => setSelectedFilter('SEMUA')}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                selectedFilter === 'SEMUA' && styles.filterChipTextActive,
-              ]}
-            >
-              Semua ({counts.SEMUA})
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.filterChip,
-              selectedFilter === 'DIBUKA' && styles.filterChipActiveDibuka,
-            ]}
-            onPress={() => setSelectedFilter('DIBUKA')}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                selectedFilter === 'DIBUKA' && styles.filterChipTextActiveDibuka,
-              ]}
-            >
-              Dibuka ({counts.DIBUKA})
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.filterChip,
-              selectedFilter === 'BELUM_DIBUKA' && styles.filterChipActiveBelum,
-            ]}
-            onPress={() => setSelectedFilter('BELUM_DIBUKA')}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                selectedFilter === 'BELUM_DIBUKA' && styles.filterChipTextActiveBelum,
-              ]}
-            >
-              Belum Dibuka ({counts.BELUM_DIBUKA})
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.filterChip,
-              selectedFilter === 'DITUTUP' && styles.filterChipActiveDitutup,
-            ]}
-            onPress={() => setSelectedFilter('DITUTUP')}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                selectedFilter === 'DITUTUP' && styles.filterChipTextActiveDitutup,
-              ]}
-            >
-              Ditutup ({counts.DITUTUP})
-            </Text>
-          </Pressable>
-        </View>
+      <View style={styles.cardFooter}>
+        <Text
+          style={[
+            styles.cardActionText,
+            activeRole === 'asisten' ? styles.cardActionTextAsisten : styles.cardActionTextPraktikan,
+          ]}
+        >
+          {activeRole === 'asisten' ? 'Kelola Sesi (Asisten) →' : 'Presensi Sesi (Praktikan) →'}
+        </Text>
       </View>
+    </Pressable>
+  );
 
-      {/* Sessions FlatList */}
+  const renderFilterChip = (key: FilterType, label: string, activeStyle: object, activeTextStyle: object) => (
+    <Pressable
+      key={key}
+      accessibilityRole="button"
+      accessibilityState={{ selected: selectedFilter === key }}
+      style={[styles.filterChip, selectedFilter === key && activeStyle]}
+      onPress={() => setSelectedFilter(key)}
+    >
+      <Text style={[styles.filterChipText, selectedFilter === key && activeTextStyle]}>
+        {label} ({counts[key]})
+      </Text>
+    </Pressable>
+  );
+
+  const renderList = () => {
+    if (loading) return <LoadingState label="Memuat jadwal…" />;
+    if (error) return <ErrorState message={error.message} onRetry={retry} />;
+    return (
       <FlatList
         data={filteredSessions}
         keyExtractor={(item) => item.id}
@@ -345,117 +164,109 @@ export default function JadwalPraktikumScreen() {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>🔍</Text>
-            <Text style={styles.emptyTitle}>Tidak ada praktikum ditemukan</Text>
-            <Text style={styles.emptySubtitle}>
-              Tidak ada sesi dengan filter &quot;{selectedFilter}&quot;.
-            </Text>
-          </View>
+          allSessions.length === 0 ? (
+            <EmptyState
+              icon="🗓️"
+              title="Belum ada jadwal praktikum"
+              subtitle={
+                activeRole === 'asisten'
+                  ? 'Buat kelas dan sesi pertama lewat menu Kelola.'
+                  : 'Anda belum terdaftar pada kelas mana pun, atau belum ada sesi. Hubungi asisten.'
+              }
+            />
+          ) : (
+            <EmptyState
+              icon="🔍"
+              title="Tidak ada praktikum ditemukan"
+              subtitle={`Tidak ada sesi dengan filter "${FILTER_LABEL[selectedFilter]}".`}
+            />
+          )
         }
       />
+    );
+  };
 
-      {/* Quick Switch Modal / Bottom Sheet */}
-      <Modal
-        visible={isSwitchModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setIsSwitchModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.topBar}>
+        <Pressable accessibilityRole="button" style={styles.backButton} onPress={() => setConfirmLogout(true)}>
+          <Text style={styles.backButtonText}>Keluar</Text>
+        </Pressable>
+        <View style={styles.headerTitleGroup}>
+          <Text style={styles.headerTitle}>Jadwal Praktikum</Text>
+          <Text style={styles.headerSubtitle}>Diperbarui real-time</Text>
+        </View>
+        {activeRole === 'asisten' ? (
           <Pressable
-            style={styles.modalBackdropDismiss}
-            onPress={() => setIsSwitchModalVisible(false)}
-          />
-          <View style={styles.bottomSheetContainer}>
-            <View style={styles.sheetHandle} />
+            accessibilityRole="button"
+            style={styles.switchButton}
+            onPress={() => router.push('/asisten/admin' as Href)}
+          >
+            <Text style={styles.switchButtonText}>⚙ Kelola</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.topBarSpacer} />
+        )}
+      </View>
 
-            <View style={styles.sheetHeader}>
-              <View>
-                <Text style={styles.sheetTitle}>Ganti Akun & Peran</Text>
-                <Text style={styles.sheetSubtitle}>
-                  Beralih instan untuk menguji tampilan Asisten & Praktikan
-                </Text>
-              </View>
-              <Pressable
-                style={styles.sheetCloseButton}
-                onPress={() => setIsSwitchModalVisible(false)}
-              >
-                <Text style={styles.sheetCloseButtonText}>✕</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.sheetContent}>
-              {DUMMY_USERS.map((user) => {
-                const isCurrent =
-                  user.role === activeRole &&
-                  (user.id === activeUserId || user.nomorInduk === activeNomorInduk);
-                const isAsisten = user.role === 'asisten';
-
-                return (
-                  <Pressable
-                    key={user.id}
-                    style={[
-                      styles.sheetUserCard,
-                      isCurrent && styles.sheetUserCardSelected,
-                    ]}
-                    onPress={() => handleSwitchProfile(user)}
-                  >
-                    <View style={styles.sheetUserCardLeft}>
-                      <View
-                        style={[
-                          styles.sheetAvatar,
-                          isAsisten ? styles.sheetAvatarAsisten : styles.sheetAvatarPraktikan,
-                        ]}
-                      >
-                        <Text style={styles.sheetAvatarText}>
-                          {isAsisten ? '👨‍🏫' : '🎓'}
-                        </Text>
-                      </View>
-                      <View style={styles.sheetUserDetails}>
-                        <Text style={styles.sheetUserName}>{user.nama}</Text>
-                        <Text style={styles.sheetUserId}>
-                          {isAsisten ? 'Kode Asisten' : 'NIM'}: {user.nomorInduk}
-                        </Text>
-                        {user.id === 'prk-2' ? (
-                          <Text style={styles.sheetUserNote}>
-                            (Belum presensi • Uji Empty State)
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-
-                    <View style={styles.sheetUserCardRight}>
-                      <View
-                        style={[
-                          styles.roleBadgeSmall,
-                          isAsisten
-                            ? styles.userRoleBadgeAsisten
-                            : styles.userRoleBadgePraktikan,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.roleBadgeSmallText,
-                            isAsisten
-                              ? styles.userRoleBadgeTextAsisten
-                              : styles.userRoleBadgeTextPraktikan,
-                          ]}
-                        >
-                          {user.role}
-                        </Text>
-                      </View>
-                      {isCurrent ? (
-                        <Text style={styles.sheetActiveCheck}>✓ Aktif</Text>
-                      ) : null}
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </View>
+      <View style={styles.userBanner}>
+        <View style={styles.userBannerLeft}>
+          <View
+            style={[
+              styles.userRoleBadge,
+              activeRole === 'asisten' ? styles.userRoleBadgeAsisten : styles.userRoleBadgePraktikan,
+            ]}
+          >
+            <Text
+              style={[
+                styles.userRoleBadgeText,
+                activeRole === 'asisten' ? styles.userRoleBadgeTextAsisten : styles.userRoleBadgeTextPraktikan,
+              ]}
+            >
+              {activeRole.toUpperCase()}
+            </Text>
+          </View>
+          <View style={styles.userInfoTextContainer}>
+            <Text style={styles.userNameText}>{profile?.nama ?? '-'}</Text>
+            <Text style={styles.userNimText}>
+              {activeRole === 'praktikan' ? 'NIM' : 'Kode'}: {profile?.nomorInduk || '-'}
+            </Text>
           </View>
         </View>
-      </Modal>
+
+        {activeRole === 'praktikan' ? (
+          <Pressable
+            accessibilityRole="button"
+            style={styles.riwayatButton}
+            onPress={() => router.push('/praktikan/riwayat' as Href)}
+          >
+            <Text style={styles.riwayatButtonText}>Riwayat 📜</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.filterSection}>
+        <Text style={styles.filterSectionLabel}>FILTER STATUS SESI:</Text>
+        <View style={styles.filterChipsRow}>
+          {renderFilterChip('SEMUA', 'Semua', styles.filterChipActiveSemua, styles.filterChipTextActive)}
+          {renderFilterChip('DIBUKA', 'Dibuka', styles.filterChipActiveDibuka, styles.filterChipTextActiveDibuka)}
+          {renderFilterChip('BELUM_DIBUKA', 'Belum Dibuka', styles.filterChipActiveBelum, styles.filterChipTextActiveBelum)}
+          {renderFilterChip('DITUTUP', 'Ditutup', styles.filterChipActiveDitutup, styles.filterChipTextActiveDitutup)}
+        </View>
+      </View>
+
+      {renderList()}
+
+      <ConfirmSheet
+        visible={confirmLogout}
+        title="Keluar dari akun?"
+        message="Anda perlu masuk kembali untuk melihat jadwal dan melakukan presensi."
+        confirmLabel="Ya, Keluar"
+        tone="asisten"
+        loading={loggingOut}
+        onConfirm={handleLogout}
+        onCancel={() => setConfirmLogout(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -801,145 +612,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#64748B',
   },
-  // Modal / Bottom Sheet
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    justifyContent: 'flex-end',
-  },
-  modalBackdropDismiss: {
-    flex: 1,
-  },
-  bottomSheetContainer: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 12,
-    paddingBottom: 32,
-    paddingHorizontal: 20,
-    maxHeight: '75%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  sheetHandle: {
-    width: 40,
-    height: 5,
-    backgroundColor: '#CBD5E1',
-    borderRadius: 3,
-    alignSelf: 'center',
-    marginBottom: 12,
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  sheetTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  sheetSubtitle: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  sheetCloseButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sheetCloseButtonText: {
-    fontSize: 14,
-    color: '#475569',
-    fontWeight: '700',
-  },
-  sheetContent: {
-    gap: 10,
-  },
-  sheetUserCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    borderRadius: 14,
-    padding: 14,
-  },
-  sheetUserCardSelected: {
-    backgroundColor: '#EFF6FF',
-    borderColor: '#3B82F6',
-  },
-  sheetUserCardLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
-  sheetAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sheetAvatarPraktikan: {
-    backgroundColor: '#DBEAFE',
-  },
-  sheetAvatarAsisten: {
-    backgroundColor: '#EDE9FE',
-  },
-  sheetAvatarText: {
-    fontSize: 20,
-  },
-  sheetUserDetails: {
-    flex: 1,
-  },
-  sheetUserName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  sheetUserId: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 1,
-  },
-  sheetUserNote: {
-    fontSize: 10,
-    color: '#D97706',
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  sheetUserCardRight: {
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  roleBadgeSmall: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  roleBadgeSmallText: {
-    fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  sheetActiveCheck: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#2563EB',
+  topBarSpacer: {
+    width: 64,
   },
 });
-

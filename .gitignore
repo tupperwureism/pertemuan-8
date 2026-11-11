@@ -47,3 +47,4 @@ GoogleService-Info.plist
 .firebase/
 firebase-debug.log*
 firestore-debug.log
+google-services.json

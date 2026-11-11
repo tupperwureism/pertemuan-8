@@ -1,5 +1,6 @@
 import {
   collection,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
@@ -77,4 +78,15 @@ export async function findPraktikanByEmail(email: string): Promise<UserDoc | nul
   );
   const first = snap.docs[0];
   return first ? toUserDoc(first.id, first.data() as Record<string, unknown>) : null;
+}
+
+/** Khusus asisten (rules): memuat profil beberapa UID sekaligus, mis. nama pada rekap presensi. */
+export async function fetchUsersByIds(uids: string[]): Promise<Record<string, UserDoc>> {
+  const unique = [...new Set(uids)];
+  const snaps = await Promise.all(unique.map((uid) => getDoc(userRef(uid)).catch(() => null)));
+  const result: Record<string, UserDoc> = {};
+  snaps.forEach((snap, i) => {
+    if (snap?.exists()) result[unique[i]] = toUserDoc(snap.id, snap.data() as Record<string, unknown>);
+  });
+  return result;
 }

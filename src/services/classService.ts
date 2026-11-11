@@ -57,6 +57,71 @@ export function subscribeClasses(
   );
 }
 
+/**
+ * Kelas yang boleh dilihat pengguna login: asisten = semua kelas; praktikan = kelas tempat ia
+ * menjadi anggota (membership -> satu listener dokumen per kelas, aman untuk rules).
+ */
+export function subscribeVisibleClasses(
+  role: UserRole,
+  callback: (classes: ClassDoc[]) => void,
+  onError: ErrorCallback,
+): Unsubscribe {
+  if (role === 'asisten') return subscribeClasses(callback, onError);
+
+  let uid: string;
+  try {
+    uid = requireUid();
+  } catch (error) {
+    onError(toError(error));
+    return () => undefined;
+  }
+  let cancelled = false;
+  const perClass = new Map<string, Unsubscribe>();
+  const results = new Map<string, ClassDoc>();
+  const emit = () => {
+    if (!cancelled) callback([...results.values()].sort((a, b) => a.nama.localeCompare(b.nama)));
+  };
+
+  const stopRoot = onSnapshot(
+    query(membersCol(), where('uid', '==', uid)),
+    (snap) => {
+      if (cancelled) return;
+      const ids = new Set(snap.docs.map((d) => d.data().classId as string));
+      for (const [id, unsub] of perClass) {
+        if (!ids.has(id)) {
+          unsub();
+          perClass.delete(id);
+          results.delete(id);
+        }
+      }
+      ids.forEach((id) => {
+        if (perClass.has(id)) return;
+        perClass.set(
+          id,
+          onSnapshot(
+            doc(firestore(), COLLECTIONS.classes, id),
+            (classSnap) => {
+              if (classSnap.exists()) results.set(id, toClass(classSnap));
+              else results.delete(id);
+              emit();
+            },
+            (error) => onError(toError(error)),
+          ),
+        );
+      });
+      emit();
+    },
+    (error) => onError(toError(error)),
+  );
+
+  return () => {
+    cancelled = true;
+    stopRoot();
+    perClass.forEach((unsub) => unsub());
+    perClass.clear();
+  };
+}
+
 /** Membuat kelas; asisten pembuat otomatis menjadi assistantIds[0]. */
 export async function createClass(input: ClassInput): Promise<string> {
   const uid = requireUid();

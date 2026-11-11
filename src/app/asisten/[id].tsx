@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { router, useLocalSearchParams, type Href } from 'expo-router';
+import React, { useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -11,36 +12,48 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
 
-import {
-  DUMMY_SESSIONS,
-  type AttendanceRecord,
-  type PraktikumSession,
-  type SessionStatus,
-} from '@/data/dummyData';
+import { ErrorBanner, ErrorState, LoadingState } from '@/components/screen-kit';
+import { useSession, useSessionRecap, useUserProfiles, useVisibleClasses } from '@/hooks/use-firestore-data';
+import { formatClock, formatSessionTime } from '@/lib/format';
+import { friendlyError } from '@/services/authService';
+import { closeSession, openSession } from '@/services/sessionService';
+import type { AttendanceDoc, SessionStatus } from '@/types/firebase';
 
 export default function AsistenSessionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const sessionId = Array.isArray(id) ? id[0] : id;
 
-  const [session, setSession] = useState<PraktikumSession | undefined>(() =>
-    DUMMY_SESSIONS.find((item) => item.id === sessionId)
-  );
-  const [catatanInput, setCatatanInput] = useState<string>(
-    session?.catatanAsisten ?? ''
-  );
+  // Semua data real-time dari Firestore; listener dibersihkan otomatis saat layar ditutup.
+  const { data: session, loading, error, retry } = useSession(sessionId);
+  const { data: classes } = useVisibleClasses('asisten');
+  const { data: attendances, error: recapError } = useSessionRecap(sessionId);
+  const recap: AttendanceDoc[] = attendances ?? [];
+  const profiles = useUserProfiles(recap.map((a) => a.praktikanUid));
+
+  const [catatanDraft, setCatatanDraft] = useState<string | null>(null);
   const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
   const [isInputFocused, setIsInputFocused] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [actionError, setActionError] = useState<string>('');
 
-  useEffect(() => {
-    const foundSession = DUMMY_SESSIONS.find((item) => item.id === sessionId);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSession(foundSession);
-    if (foundSession) {
-      setCatatanInput(foundSession.catatanAsisten ?? '');
-    }
-  }, [sessionId]);
+  const goBack = () => (router.canGoBack() ? router.back() : router.replace('/jadwal' as Href));
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <LoadingState label="Memuat sesi…" />
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <ErrorState message={error.message} onRetry={retry} />
+      </SafeAreaView>
+    );
+  }
 
   if (!session) {
     return (
@@ -48,15 +61,12 @@ export default function AsistenSessionDetailScreen() {
         <View style={styles.notFoundContainer}>
           <Text style={styles.notFoundTitle}>Sesi Tidak Ditemukan</Text>
           <Text style={styles.notFoundSubtitle}>
-            Data sesi praktikum dengan ID &quot;{sessionId ?? '-'}&quot; tidak tersedia di daftar jadwal.
+            Sesi praktikum dengan ID &quot;{sessionId ?? '-'}&quot; tidak tersedia atau sudah dihapus.
           </Text>
           <Pressable
             accessibilityRole="button"
-            onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
-            style={({ pressed }) => [
-              styles.backButtonPrimary,
-              pressed && styles.buttonPressed,
-            ]}
+            onPress={goBack}
+            style={({ pressed }) => [styles.backButtonPrimary, pressed && styles.buttonPressed]}
           >
             <Text style={styles.backButtonPrimaryText}>Kembali ke Jadwal</Text>
           </Pressable>
@@ -64,6 +74,9 @@ export default function AsistenSessionDetailScreen() {
       </SafeAreaView>
     );
   }
+
+  const className = classes?.find((c) => c.id === session.classId)?.kodeKelas ?? '…';
+  const catatanInput = catatanDraft ?? session.catatan;
 
   const isBelumDibuka = session.status === 'BELUM_DIBUKA';
   const isDibuka = session.status === 'DIBUKA';
@@ -80,20 +93,25 @@ export default function AsistenSessionDetailScreen() {
     setIsModalVisible(true);
   };
 
-  // SRS-03 requires confirmation through the modal before mutating session status.
-  const handleConfirmStatusChange = () => {
-    if (!targetStatus) return;
-
-    setSession((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        status: targetStatus,
-        catatanAsisten: catatanInput.trim(),
-      };
-    });
-
-    setIsModalVisible(false);
+  // Konfirmasi lewat modal, lalu status diubah lewat transaksi Firestore (maju satu langkah saja).
+  const handleConfirmStatusChange = async () => {
+    if (!targetStatus || saving) return;
+    setSaving(true);
+    setActionError('');
+    try {
+      if (targetStatus === 'DIBUKA') {
+        await openSession(session.id, catatanInput);
+      } else {
+        await closeSession(session.id, catatanInput);
+      }
+      setCatatanDraft(null);
+      setIsModalVisible(false);
+    } catch (e) {
+      setIsModalVisible(false);
+      setActionError(e instanceof Error && e.message ? e.message : friendlyError(e));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const getStatusBadgeConfig = (status: SessionStatus) => {
@@ -135,7 +153,7 @@ export default function AsistenSessionDetailScreen() {
           <View style={styles.topBar}>
             <Pressable
               accessibilityRole="button"
-              onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}
+              onPress={goBack}
               style={({ pressed }) => [
                 styles.topBackButton,
                 pressed && styles.buttonPressed,
@@ -150,7 +168,7 @@ export default function AsistenSessionDetailScreen() {
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
               <View style={styles.kelasPill}>
-                <Text style={styles.kelasPillText}>Kelas {session.kelas}</Text>
+                <Text style={styles.kelasPillText}>Kelas {className}</Text>
               </View>
               <View style={[styles.statusBadge, currentBadge.container]}>
                 <Text style={[styles.statusBadgeText, currentBadge.text]}>
@@ -159,11 +177,11 @@ export default function AsistenSessionDetailScreen() {
               </View>
             </View>
 
-            <Text style={styles.namaPraktikumText}>{session.namaPraktikum}</Text>
+            <Text style={styles.namaPraktikumText}>{session.judul}</Text>
 
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>Waktu:</Text>
-              <Text style={styles.metaValue}>{session.waktu}</Text>
+              <Text style={styles.metaValue}>{formatSessionTime(session.startsAt, session.endsAt)}</Text>
             </View>
 
             <View style={styles.metaRow}>
@@ -174,8 +192,8 @@ export default function AsistenSessionDetailScreen() {
             <View style={styles.currentNoteBox}>
               <Text style={styles.currentNoteLabel}>Catatan Asisten:</Text>
               <Text style={styles.currentNoteValue}>
-                {session.catatanAsisten && session.catatanAsisten.trim().length > 0
-                  ? session.catatanAsisten
+                {session.catatan.trim().length > 0
+                  ? session.catatan
                   : 'Belum ada catatan asisten'}
               </Text>
             </View>
@@ -194,7 +212,7 @@ export default function AsistenSessionDetailScreen() {
               multiline
               numberOfLines={3}
               onBlur={() => setIsInputFocused(false)}
-              onChangeText={setCatatanInput}
+              onChangeText={setCatatanDraft}
               onFocus={() => setIsInputFocused(true)}
               placeholder="Contoh: Silakan presensi maksimal 15 menit pertama."
               placeholderTextColor="#475569"
@@ -205,6 +223,8 @@ export default function AsistenSessionDetailScreen() {
               ]}
               value={catatanInput}
             />
+
+            {actionError ? <ErrorBanner message={actionError} /> : null}
 
             <View style={styles.actionSectionContainer}>
               {isBelumDibuka && (
@@ -253,13 +273,15 @@ export default function AsistenSessionDetailScreen() {
               <Text style={styles.sectionTitle}>Rekap Kehadiran Praktikan</Text>
               <View style={styles.countBadge}>
                 <Text style={styles.countBadgeText}>
-                  {session.daftarHadir.length} Praktikan
+                  {recap.length} Praktikan
                 </Text>
               </View>
             </View>
 
             {/* SRS-04 requires an explicit Empty State when daftarHadir is empty. */}
-            {session.daftarHadir.length === 0 ? (
+            {recapError ? (
+              <ErrorBanner message={recapError.message} />
+            ) : recap.length === 0 ? (
               <View style={styles.emptyStateContainer}>
                 <Text style={styles.emptyStateText}>
                   Belum ada praktikan yang melakukan presensi pada sesi ini
@@ -267,13 +289,13 @@ export default function AsistenSessionDetailScreen() {
               </View>
             ) : (
               <View style={styles.attendanceListContainer}>
-                {session.daftarHadir.map((item: AttendanceRecord) => (
+                {recap.map((item) => (
                   <View key={item.id} style={styles.attendanceItemCard}>
                     <View style={styles.attendanceItemLeft}>
                       <Text style={styles.praktikanNameText}>
-                        {item.namaPraktikan}
+                        {profiles[item.praktikanUid]?.nama ?? 'Memuat nama…'}
                       </Text>
-                      <Text style={styles.praktikanNimText}>NIM: {item.nim}</Text>
+                      <Text style={styles.praktikanNimText}>NIM: {profiles[item.praktikanUid]?.nomorInduk || '-'}</Text>
                       {item.catatan && item.catatan.trim().length > 0 ? (
                         <Text style={styles.praktikanCatatanText}>
                           Catatan: &quot;{item.catatan}&quot;
@@ -282,7 +304,7 @@ export default function AsistenSessionDetailScreen() {
                     </View>
                     <View style={styles.waktuHadirBadge}>
                       <Text style={styles.waktuHadirBadgeText}>
-                        {item.waktuHadir}
+                        {formatClock(item.attendedAt)}
                       </Text>
                     </View>
                   </View>
@@ -344,6 +366,7 @@ export default function AsistenSessionDetailScreen() {
 
               <Pressable
                 accessibilityRole="button"
+                disabled={saving}
                 onPress={handleConfirmStatusChange}
                 style={({ pressed }) => [
                   styles.modalConfirmButton,
@@ -352,7 +375,7 @@ export default function AsistenSessionDetailScreen() {
                 ]}
               >
                 <Text style={styles.modalConfirmButtonText}>
-                  {isBelumDibuka ? 'Ya, Buka Sesi' : 'Ya, Tutup Sesi'}
+                  {saving ? 'Memproses…' : isBelumDibuka ? 'Ya, Buka Sesi' : 'Ya, Tutup Sesi'}
                 </Text>
               </Pressable>
             </View>

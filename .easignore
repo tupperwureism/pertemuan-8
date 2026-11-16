@@ -1,0 +1,33 @@
+# Diadaptasi dari .gitignore agar EAS Build tetap menyertakan google-services.json lokal
+# meskipun google-services.json di-ignore oleh Git.
+
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+*.pem
+.env*.local
+*.tsbuildinfo
+example
+/ios
+/android
+GoogleService-Info.plist
+.firebase/
+firebase-debug.log*
+firestore-debug.log
+.claude
+tests/
+!google-services.json

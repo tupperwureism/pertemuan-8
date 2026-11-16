@@ -33,6 +33,7 @@ const NEW_SESSION = 'sesiBaru';
 let env;
 
 const asisten = () => env.authenticatedContext('ast1', { email: 'ast@x.id' }).firestore();
+const asistenLain = () => env.authenticatedContext('ast2', { email: 'ast2@x.id' }).firestore();
 const praktikanA = () => env.authenticatedContext('prkA', { email: 'a@x.id' }).firestore();
 const praktikanB = () => env.authenticatedContext('prkB', { email: 'b@x.id' }).firestore();
 const outsider = () => env.authenticatedContext('prkC', { email: 'c@x.id' }).firestore();
@@ -67,6 +68,7 @@ beforeEach(async () => {
         updatedAt: ts(0),
       });
     await profile('ast1', 'asisten', 'ast@x.id');
+    await profile('ast2', 'asisten', 'ast2@x.id');
     await profile('prkA', 'praktikan', 'a@x.id');
     await profile('prkB', 'praktikan', 'b@x.id');
     await profile('prkC', 'praktikan', 'c@x.id');
@@ -196,6 +198,11 @@ describe('sesi & kelas', () => {
     await assertFails(updateDoc(doc(asisten(), 'sessions', CLOSED_SESSION), { status: 'DIBUKA', updatedAt: serverTimestamp() }));
     await assertFails(updateDoc(doc(asisten(), 'sessions', OPEN_SESSION), { status: 'BELUM_DIBUKA', updatedAt: serverTimestamp() }));
   });
+  it('asisten lain di luar assistantIds tidak dapat membaca atau mengubah kelas/sesi', async () => {
+    await assertFails(getDoc(doc(asistenLain(), 'classes', CLASS_ID)));
+    await assertFails(updateDoc(doc(asistenLain(), 'sessions', OPEN_SESSION), { status: 'DITUTUP', updatedAt: serverTimestamp() }));
+    await assertFails(deleteDoc(doc(asistenLain(), 'sessions', OPEN_SESSION)));
+  });
 });
 
 describe('presensi', () => {
@@ -204,39 +211,57 @@ describe('presensi', () => {
   });
 
   it('praktikan anggota presensi atas UID sendiri saat sesi DIBUKA', async () => {
+    await assertSucceeds(setDoc(doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`), attendance(OPEN_SESSION, 'prkB')));
+  });
+  it('praktikan dengan izin PENDING atau APPROVED tidak dapat presensi pada sesi yang sama', async () => {
+    await assertFails(setDoc(doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkA`), attendance(OPEN_SESSION, 'prkA')));
+    await updateDoc(doc(asisten(), 'permissions', `${OPEN_SESSION}_prkA`), {
+      status: 'APPROVED', reviewedBy: 'ast1', reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
+    await assertFails(setDoc(doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkA`), attendance(OPEN_SESSION, 'prkA')));
+  });
+  it('praktikan yang izinnya REJECTED tetap dapat presensi saat sesi masih DIBUKA', async () => {
+    await updateDoc(doc(asisten(), 'permissions', `${OPEN_SESSION}_prkA`), {
+      status: 'REJECTED', reviewedBy: 'ast1', reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    });
     await assertSucceeds(setDoc(doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkA`), attendance(OPEN_SESSION, 'prkA')));
   });
   it('presensi kedua pada dokumen yang sama ditolak (tidak ada update)', async () => {
-    const ref = doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkA`);
-    await assertSucceeds(setDoc(ref, attendance(OPEN_SESSION, 'prkA')));
-    await assertFails(setDoc(ref, attendance(OPEN_SESSION, 'prkA')));
+    const ref = doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`);
+    await assertSucceeds(setDoc(ref, attendance(OPEN_SESSION, 'prkB')));
+    await assertFails(setDoc(ref, attendance(OPEN_SESSION, 'prkB')));
   });
   it('presensi atas nama orang lain ditolak, juga oleh asisten', async () => {
     await assertFails(setDoc(doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkB`), attendance(OPEN_SESSION, 'prkB')));
     await assertFails(setDoc(doc(asisten(), 'attendances', `${OPEN_SESSION}_prkB`), attendance(OPEN_SESSION, 'prkB')));
   });
   it('presensi pada sesi DITUTUP ditolak', async () => {
-    await assertFails(setDoc(doc(praktikanA(), 'attendances', `${CLOSED_SESSION}_prkA`), attendance(CLOSED_SESSION, 'prkA')));
+    await assertFails(setDoc(doc(praktikanB(), 'attendances', `${CLOSED_SESSION}_prkB`), attendance(CLOSED_SESSION, 'prkB')));
   });
   it('non-anggota kelas tidak bisa presensi', async () => {
     await assertFails(setDoc(doc(outsider(), 'attendances', `${OPEN_SESSION}_prkC`), attendance(OPEN_SESSION, 'prkC')));
   });
   it('ID dokumen harus sessionId_uid', async () => {
-    await assertFails(setDoc(doc(praktikanA(), 'attendances', 'acak'), attendance(OPEN_SESSION, 'prkA')));
+    await assertFails(setDoc(doc(praktikanB(), 'attendances', 'acak'), attendance(OPEN_SESSION, 'prkB')));
   });
   it('attendedAt harus server timestamp', async () => {
-    await assertFails(setDoc(doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkA`), {
-      ...attendance(OPEN_SESSION, 'prkA'), attendedAt: ts(8),
+    await assertFails(setDoc(doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`), {
+      ...attendance(OPEN_SESSION, 'prkB'), attendedAt: ts(8),
     }));
   });
-  it('asisten membaca rekap; praktikan lain tidak', async () => {
+  it('asisten kelas membaca rekap; praktikan lain dan asisten kelas lain tidak', async () => {
     await env.withSecurityRulesDisabled((ctx) =>
       setDoc(doc(ctx.firestore(), 'attendances', `${OPEN_SESSION}_prkA`), {
         sessionId: OPEN_SESSION, classId: CLASS_ID, praktikanUid: 'prkA', attendedAt: ts(8),
       }),
     );
-    const q = (db) => query(collection(db, 'attendances'), where('sessionId', '==', OPEN_SESSION));
+    const q = (db) => query(
+      collection(db, 'attendances'),
+      where('sessionId', '==', OPEN_SESSION),
+      where('classId', '==', CLASS_ID),
+    );
     await assertSucceeds(getDocs(q(asisten())));
+    await assertFails(getDocs(q(asistenLain())));
     await assertFails(getDocs(q(praktikanB())));
     await assertSucceeds(getDoc(doc(praktikanA(), 'attendances', `${OPEN_SESSION}_prkA`)));
     await assertFails(getDoc(doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkA`)));
@@ -261,7 +286,10 @@ describe('izin', () => {
       status: 'APPROVED', reviewedBy: 'prkA', reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
   });
-  it('asisten memutus izin dengan metadata review benar', async () => {
+  it('asisten kelas memutus izin dengan metadata review benar; asisten lain ditolak', async () => {
+    await assertFails(updateDoc(permissionRef(asistenLain()), {
+      status: 'APPROVED', reviewedBy: 'ast2', reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
     await assertSucceeds(updateDoc(permissionRef(asisten()), {
       status: 'APPROVED', reviewedBy: 'ast1', reviewedAt: serverTimestamp(), updatedAt: serverTimestamp(),
     }));
@@ -280,5 +308,15 @@ describe('izin', () => {
     const ref = doc(praktikanA(), 'permissions', `${CLOSED_SESSION}_prkA`);
     await assertFails(setDoc(ref, { ...base, status: 'APPROVED' }));
     await assertSucceeds(setDoc(ref, base));
+  });
+  it('praktikan yang sudah presensi tidak dapat mengajukan izin pada sesi yang sama', async () => {
+    await setDoc(doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`), {
+      sessionId: OPEN_SESSION, classId: CLASS_ID, praktikanUid: 'prkB', attendedAt: serverTimestamp(),
+    });
+    await assertFails(setDoc(doc(praktikanB(), 'permissions', `${OPEN_SESSION}_prkB`), {
+      sessionId: OPEN_SESSION, classId: CLASS_ID, praktikanUid: 'prkB', alasan: 'Sakit',
+      aiStatus: 'PENDING', aiLabel: null, aiConfidence: null, status: 'PENDING',
+      reviewedBy: null, reviewedAt: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
   });
 });

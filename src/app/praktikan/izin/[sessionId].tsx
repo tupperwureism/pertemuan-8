@@ -21,9 +21,11 @@ import {
   analyzeSentiment,
   type SentimentAnalysisResult,
 } from '@/services/aiService';
-import { subscribeClassById } from '@/services/attendanceService';
-import { friendlyError } from '@/services/authService';
+import { subscribeClassById, subscribeMySessionAttendance } from '@/services/attendanceService';
+import { getErrorMessage } from '@/services/authService';
 import {
+  canRetryPermissionAi,
+  isUnknownVocabularyAi,
   retryPermissionAi,
   submitPermission,
   subscribeMySessionPermission,
@@ -32,6 +34,7 @@ import {
 } from '@/services/permissionService';
 import { subscribeSession } from '@/services/sessionService';
 import type {
+  AttendanceDoc,
   ClassDoc,
   PermissionStatus,
   SessionDoc,
@@ -51,11 +54,16 @@ export default function PraktikanPermissionFormScreen() {
     sessionId?: string | string[];
   }>();
   const sessionId = (Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId) ?? '';
+  return <PraktikanPermissionFormContent key={sessionId} sessionId={sessionId} />;
+}
+
+function PraktikanPermissionFormContent({ sessionId }: { sessionId: string }) {
   const { uid, profile, status: authStatus } = useAuth();
 
   const [session, setSession] = useState<SessionDoc | null>(null);
   const [classDoc, setClassDoc] = useState<ClassDoc | null>(null);
   const [existingPermission, setExistingPermission] = useState<PermissionDocWithMeta | null>(null);
+  const [existingAttendance, setExistingAttendance] = useState<AttendanceDoc | null>(null);
 
   const [alasan, setAlasan] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
@@ -74,8 +82,9 @@ export default function PraktikanPermissionFormScreen() {
 
     let sessionDone = false;
     let permDone = false;
+    let attDone = false;
     const checkDone = () => {
-      if (sessionDone && permDone) setLoading(false);
+      if (sessionDone && permDone && attDone) setLoading(false);
     };
 
     const unsubSession = subscribeSession(
@@ -87,7 +96,7 @@ export default function PraktikanPermissionFormScreen() {
         checkDone();
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );
@@ -104,14 +113,29 @@ export default function PraktikanPermissionFormScreen() {
         checkDone();
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
+      },
+    );
+
+    const unsubAtt = subscribeMySessionAttendance(
+      sessionId,
+      uid,
+      (nextAtt) => {
+        setExistingAttendance(nextAtt);
+        attDone = true;
+        checkDone();
+      },
+      () => {
+        attDone = true;
+        checkDone();
       },
     );
 
     return () => {
       unsubSession();
       unsubPerm();
+      unsubAtt();
     };
   }, [canSubscribe, sessionId, uid]);
 
@@ -188,10 +212,7 @@ export default function PraktikanPermissionFormScreen() {
       Alert.alert('Berhasil', 'Pengajuan izin berhasil dikirim.');
     } catch (error) {
       console.error('Submit permission failed:', error);
-      const msg =
-        error instanceof Error && !('code' in error)
-          ? error.message
-          : friendlyError(error);
+      const msg = getErrorMessage(error);
       setErrorMessage(msg);
       Alert.alert('Gagal', msg || 'Pengajuan izin belum berhasil disimpan.');
     } finally {
@@ -210,7 +231,7 @@ export default function PraktikanPermissionFormScreen() {
       );
       setAiResult(updated);
     } catch (error) {
-      Alert.alert('Gagal', friendlyError(error));
+      Alert.alert('Gagal', getErrorMessage(error));
     } finally {
       setRetryingAi(false);
     }
@@ -222,6 +243,29 @@ export default function PraktikanPermissionFormScreen() {
         <View style={styles.centered}>
           <ActivityIndicator size="large" color="#2563EB" />
           <Text style={styles.loadingText}>Memuat data pengajuan izin...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (uid && !session) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={styles.centered}>
+          <Text style={styles.notFoundTitle}>
+            {errorMessage ? 'Sesi Tidak Dapat Dimuat' : 'Sesi Tidak Ditemukan'}
+          </Text>
+          <Text style={styles.notFoundText}>
+            {errorMessage
+              ? errorMessage
+              : `Sesi dengan ID “${sessionId}” tidak tersedia atau Anda bukan anggota kelas ini.`}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            style={styles.analyzeButton}
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/jadwal'))}>
+            <Text style={styles.analyzeButtonText}>Kembali ke Jadwal</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -301,7 +345,20 @@ export default function PraktikanPermissionFormScreen() {
               />
 
               {existingPermission.status === 'PENDING' &&
-              existingPermission.aiStatus === 'FAILED' ? (
+              !aiResult &&
+              !toSentimentResultFromDoc(existingPermission) ? (
+                <Text style={styles.aiHintText}>
+                  Analisis sentimen AI belum tersimpan. Anda dapat menjalankannya ulang di bawah ini.
+                </Text>
+              ) : null}
+
+              {isUnknownVocabularyAi(existingPermission) ? (
+                <Text style={styles.aiHintText}>
+                  Kata-kata pada alasan ini belum terdapat pada kosakata model sentimen lokal. Pengajuan tetap diproses untuk diperiksa asisten.
+                </Text>
+              ) : null}
+
+              {canRetryPermissionAi(existingPermission) ? (
                 <Pressable
                   style={styles.retryButton}
                   onPress={handleRetryAi}
@@ -318,6 +375,18 @@ export default function PraktikanPermissionFormScreen() {
                 style={styles.secondaryButton}
                 onPress={() => router.push('/praktikan/izin' as never)}>
                 <Text style={styles.secondaryButtonText}>Lihat Semua Riwayat Izin Saya</Text>
+              </Pressable>
+            </View>
+          ) : existingAttendance ? (
+            <View style={styles.existingCard}>
+              <Text style={styles.existingTitle}>Presensi Sudah Tercatat</Text>
+              <Text style={styles.fieldHelper}>
+                Anda sudah melakukan presensi pada sesi ini, sehingga tidak dapat mengajukan izin ketidakhadiran.
+              </Text>
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={() => router.push('/praktikan/riwayat')}>
+                <Text style={styles.secondaryButtonText}>Lihat Riwayat Kehadiran</Text>
               </Pressable>
             </View>
           ) : (
@@ -385,6 +454,9 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   loadingText: { color: '#475569', fontSize: 14, fontWeight: '600' },
+  notFoundTitle: { color: '#0F172A', fontSize: 20, fontWeight: '800', textAlign: 'center' },
+  notFoundText: { color: '#64748B', fontSize: 14, lineHeight: 20, textAlign: 'center' },
+  aiHintText: { color: '#64748B', fontSize: 12, lineHeight: 18 },
   content: {
     alignSelf: 'center',
     gap: 16,

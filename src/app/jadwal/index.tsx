@@ -7,6 +7,7 @@ import { ConfirmSheet, EmptyState, ErrorState, LoadingState } from '@/components
 import { useAuth } from '@/context/AuthContext';
 import { useSessions, useVisibleClasses } from '@/hooks/use-firestore-data';
 import { formatSessionTime } from '@/lib/format';
+import { getErrorMessage } from '@/services/authService';
 import type { SessionDoc, SessionStatus } from '@/types/firebase';
 
 type FilterType = 'SEMUA' | SessionStatus;
@@ -155,7 +156,7 @@ export default function JadwalPraktikumScreen() {
 
   const renderList = () => {
     if (loading) return <LoadingState label="Memuat jadwal…" />;
-    if (error) return <ErrorState message={error.message} onRetry={retry} />;
+    if (error) return <ErrorState message={getErrorMessage(error)} onRetry={retry} />;
     return (
       <FlatList
         data={filteredSessions}
@@ -242,7 +243,15 @@ export default function JadwalPraktikumScreen() {
           >
             <Text style={styles.riwayatButtonText}>Riwayat 📜</Text>
           </Pressable>
-        ) : null}
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            style={styles.asistenIzinButton}
+            onPress={() => router.push('/asisten/izin' as Href)}
+          >
+            <Text style={styles.asistenIzinButtonText}>Pengajuan Izin 📋</Text>
+          </Pressable>
+        )}
       </View>
 
       <View style={styles.filterSection}>
@@ -386,6 +395,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#1D4ED8',
+  },
+  asistenIzinButton: {
+    backgroundColor: '#F5F3FF',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
+  asistenIzinButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6D28D9',
   },
   filterSection: {
     paddingHorizontal: 16,

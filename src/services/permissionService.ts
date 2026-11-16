@@ -28,7 +28,7 @@ import {
   type SentimentAnalysisResult,
   type SentimentLabel,
 } from './aiService';
-import { firestore, requireUid, toError, withId } from './firebase';
+import { firestore, requireUid, subscribePerClassQuery, toError, withId } from './firebase';
 
 export interface PermissionAiRawMeta {
   status?: SentimentAnalysisResult['status'];
@@ -107,11 +107,21 @@ export function toSentimentResultFromDoc(
   };
 }
 
+export function canRetryPermissionAi(perm: PermissionDocWithMeta | null | undefined): boolean {
+  if (!perm || perm.status !== 'PENDING') return false;
+  if (perm.aiStatus === 'PENDING' && !perm.aiLabel) return true;
+  return perm.aiStatus === 'FAILED' && perm.aiRaw?.status !== 'unknown_vocabulary';
+}
+
+export function isUnknownVocabularyAi(perm: PermissionDocWithMeta | null | undefined): boolean {
+  return Boolean(perm && perm.aiStatus === 'FAILED' && perm.aiRaw?.status === 'unknown_vocabulary');
+}
+
 /**
  * Menyimpan pengajuan izin praktikan untuk sesi tertentu (`permissions/{sessionId}_{uid}`).
  * Alur tahan kegagalan sesuai panduan Sprint 2 & instruksi PM:
  * 1. Validasi alasan tidak kosong (maksimal 1000 karakter).
- * 2. Pastikan belum ada pengajuan izin pada sesi yang sama.
+ * 2. Pastikan belum ada presensi maupun pengajuan izin pada sesi yang sama.
  * 3. Simpan dokumen lebih dahulu dengan `status: 'PENDING'` dan `aiStatus: 'PENDING'`.
  * 4. Analisis sentimen alasan terbaru secara lokal, lalu update `aiStatus`, `aiLabel`, `aiConfidence`, dan `aiRaw`.
  * 5. Jika analisis gagal, pengajuan tetap tersimpan dengan `aiStatus: 'FAILED'`.
@@ -136,15 +146,27 @@ export async function submitPermission(
     throw new Error('Alasan izin maksimal 1000 karakter.');
   }
 
-  // Cek apakah sudah pernah mengajukan izin di sesi ini
-  const existingSnap = await getDocs(
-    query(
-      permissionsCol(),
-      where('praktikanUid', '==', uid),
-      where('sessionId', '==', cleanSessionId),
+  // Cek apakah sudah pernah presensi atau mengajukan izin pada sesi yang sama
+  const [existingAttSnap, existingPermSnap] = await Promise.all([
+    getDocs(
+      query(
+        collection(firestore(), COLLECTIONS.attendances),
+        where('praktikanUid', '==', uid),
+        where('sessionId', '==', cleanSessionId),
+      ),
     ),
-  );
-  if (!existingSnap.empty) {
+    getDocs(
+      query(
+        permissionsCol(),
+        where('praktikanUid', '==', uid),
+        where('sessionId', '==', cleanSessionId),
+      ),
+    ),
+  ]);
+  if (!existingAttSnap.empty) {
+    throw new Error('Anda sudah melakukan presensi pada sesi ini, sehingga tidak dapat mengajukan izin.');
+  }
+  if (!existingPermSnap.empty) {
     throw new Error('Anda sudah mengajukan izin untuk sesi ini.');
   }
 
@@ -311,17 +333,29 @@ export function subscribeMySessionPermission(
 }
 
 /**
- * Listener real-time seluruh pengajuan izin untuk diperiksa oleh Asisten.
+ * Listener real-time seluruh pengajuan izin pada kelas yang diasisteni oleh UID login.
  */
 export function subscribeAllPermissions(
   callback: (permissions: PermissionDocWithMeta[]) => void,
   onError: ErrorCallback,
 ): Unsubscribe {
-  return onSnapshot(
-    permissionsCol(),
-    (snap) => callback(sortByCreatedDesc(snap.docs.map(toPermission))),
-    (error) => onError(toError(error)),
-  );
+  let uid: string;
+  try {
+    uid = requireUid();
+  } catch (error) {
+    onError(toError(error));
+    return () => undefined;
+  }
+
+  return subscribePerClassQuery<PermissionDocWithMeta>({
+    rootQuery: query(collection(firestore(), COLLECTIONS.classes), where('assistantIds', 'array-contains', uid)),
+    extractClassId: (d) => d.id,
+    buildClassQuery: (classId) => query(permissionsCol(), where('classId', '==', classId)),
+    mapDoc: toPermission,
+    sortItems: sortByCreatedDesc,
+    callback,
+    onError,
+  });
 }
 
 /**

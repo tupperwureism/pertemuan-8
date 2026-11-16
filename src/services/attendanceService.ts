@@ -13,9 +13,11 @@ import {
 import {
   attendanceId,
   COLLECTIONS,
+  permissionId,
   type AttendanceDoc,
   type ClassDoc,
   type ErrorCallback,
+  type PermissionStatus,
   type SessionDoc,
   type Unsubscribe,
 } from '@/types/firebase';
@@ -67,19 +69,37 @@ export async function recordAttendance(
   }
 
   // Cek awal via equality query (aman terhadap rule resource.data.praktikanUid == request.auth.uid).
-  const existingSnap = await getDocs(
-    query(
-      attendancesCol(),
-      where('praktikanUid', '==', authUid),
-      where('sessionId', '==', cleanSessionId),
+  const [existingSnap, existingPermSnap] = await Promise.all([
+    getDocs(
+      query(
+        attendancesCol(),
+        where('praktikanUid', '==', authUid),
+        where('sessionId', '==', cleanSessionId),
+      ),
     ),
-  );
+    getDocs(
+      query(
+        collection(firestore(), COLLECTIONS.permissions),
+        where('praktikanUid', '==', authUid),
+        where('sessionId', '==', cleanSessionId),
+      ),
+    ),
+  ]);
   if (!existingSnap.empty) {
     throw new Error('Presensi Anda sudah tercatat pada sesi ini.');
+  }
+  const existingPermStatus = (existingPermSnap.docs[0]?.data() as { status?: PermissionStatus } | undefined)?.status;
+  if (existingPermStatus && existingPermStatus !== 'REJECTED') {
+    throw new Error(
+      existingPermStatus === 'APPROVED'
+        ? 'Izin Anda pada sesi ini sudah diterima. Anda tidak dapat melakukan presensi.'
+        : 'Anda sudah mengajukan izin yang sedang menunggu pemeriksaan pada sesi ini.',
+    );
   }
 
   const targetId = attendanceId(cleanSessionId, authUid);
   const targetRef = attendanceRef(targetId);
+  const targetPermRef = doc(firestore(), COLLECTIONS.permissions, permissionId(cleanSessionId, authUid));
 
   await runTransaction(firestore(), async (tx) => {
     const sessSnap = await tx.get(sessionRef(cleanSessionId));
@@ -96,21 +116,27 @@ export async function recordAttendance(
       );
     }
 
-    // Jika rules mengizinkan baca dokumen yang belum ada (resource == null), pastikan belum ada di dalam transaksi.
+    // Jika rules mengizinkan baca dokumen yang belum ada (resource == null), pastikan belum ada presensi maupun izin aktif.
     try {
-      const currentAtt = await tx.get(targetRef);
+      const [currentAtt, currentPerm] = await Promise.all([
+        tx.get(targetRef),
+        tx.get(targetPermRef),
+      ]);
       if (currentAtt.exists()) {
         throw new Error('Presensi Anda sudah tercatat pada sesi ini.');
       }
+      if (currentPerm.exists()) {
+        const permStatus = (currentPerm.data() as { status?: PermissionStatus }).status;
+        if (permStatus && permStatus !== 'REJECTED') {
+          throw new Error(
+            permStatus === 'APPROVED'
+              ? 'Izin Anda pada sesi ini sudah diterima. Anda tidak dapat melakukan presensi.'
+              : 'Anda sudah mengajukan izin yang sedang menunggu pemeriksaan pada sesi ini.',
+          );
+        }
+      }
     } catch (err) {
       const code = (err as { code?: string } | null)?.code ?? '';
-      if (
-        err instanceof Error &&
-        err.message === 'Presensi Anda sudah tercatat pada sesi ini.'
-      ) {
-        throw err;
-      }
-      // Abaikan permission-denied pada baca dokumen yang belum ada karena rule allow update: if false tetap menolak duplikasi.
       if (!code.includes('permission-denied')) {
         throw err;
       }

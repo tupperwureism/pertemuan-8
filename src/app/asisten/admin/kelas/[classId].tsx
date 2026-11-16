@@ -17,7 +17,7 @@ import {
 } from '@/components/screen-kit';
 import { useClassMembers, useSessions, useUserProfiles, useVisibleClasses } from '@/hooks/use-firestore-data';
 import { formatSessionTime, parseDateTime, toDateInput, toTimeInput } from '@/lib/format';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import { addClassMember, deleteClass, removeClassMember, updateClass } from '@/services/classService';
 import { createSession, deleteSession, updateSession } from '@/services/sessionService';
 import { findPraktikanByEmail } from '@/services/userService';
@@ -41,7 +41,7 @@ export default function AdminClassDetailScreen() {
 
   const { data: classes, loading, error, retry } = useVisibleClasses('asisten');
   const { data: members, error: membersError } = useClassMembers(classId);
-  const { data: allSessions } = useSessions();
+  const { data: allSessions, loading: sessionsLoading, error: sessionsError, retry: retrySessions } = useSessions();
   const profiles = useUserProfiles((members ?? []).map((m) => m.uid));
 
   const cls = classes?.find((c) => c.id === classId);
@@ -73,7 +73,7 @@ export default function AdminClassDetailScreen() {
       setDialog(null);
       afterSuccess?.();
     } catch (e) {
-      setDialogError(e instanceof Error && e.message && !('code' in e) ? e.message : friendlyError(e));
+      setDialogError(getErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -91,7 +91,7 @@ export default function AdminClassDetailScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <ScreenHeader title="Detail Kelas" onBack={goBack} />
-        <ErrorState message={error.message} onRetry={retry} />
+        <ErrorState message={getErrorMessage(error)} onRetry={retry} />
       </SafeAreaView>
     );
   }
@@ -216,7 +216,7 @@ export default function AdminClassDetailScreen() {
               <Text style={styles.smallButtonText}>+ Peserta</Text>
             </Pressable>
           </View>
-          {membersError ? <ErrorBanner message={membersError.message} /> : null}
+          {membersError ? <ErrorBanner message={getErrorMessage(membersError)} /> : null}
           {!membersError && (members ?? []).length === 0 ? (
             <Text style={styles.emptyText}>Belum ada peserta. Tambahkan praktikan lewat email akun mereka.</Text>
           ) : (
@@ -252,7 +252,16 @@ export default function AdminClassDetailScreen() {
               <Text style={styles.smallButtonText}>+ Sesi</Text>
             </Pressable>
           </View>
-          {sessions.length === 0 ? (
+          {sessionsError ? (
+            <View style={styles.sessionErrorBox}>
+              <ErrorBanner message={getErrorMessage(sessionsError)} />
+              <Pressable accessibilityRole="button" onPress={retrySessions} style={styles.linkButton}>
+                <Text style={styles.linkText}>Muat ulang daftar sesi</Text>
+              </Pressable>
+            </View>
+          ) : sessionsLoading ? (
+            <Text style={styles.emptyText}>Memuat sesi…</Text>
+          ) : sessions.length === 0 ? (
             <Text style={styles.emptyText}>Belum ada sesi untuk kelas ini.</Text>
           ) : (
             sessions.map((s) => (
@@ -335,7 +344,7 @@ export default function AdminClassDetailScreen() {
       <ConfirmSheet
         visible={dialog?.type === 'deleteClass'}
         title="Hapus kelas ini?"
-        message={`Kelas "${cls.nama}" beserta seluruh peserta dan sesinya akan dihapus permanen dan tidak dapat dikembalikan.${dialogError && dialog?.type === 'deleteClass' ? `\n\n${dialogError}` : ''}`}
+        message={`Kelas "${cls.nama}" beserta seluruh peserta, sesi, data presensi, dan pengajuan izin terkait akan dihapus permanen.${dialogError && dialog?.type === 'deleteClass' ? `\n\n${dialogError}` : ''}`}
         confirmLabel="Ya, Hapus Kelas"
         loading={busy}
         onConfirm={confirmDeleteClass}
@@ -353,7 +362,7 @@ export default function AdminClassDetailScreen() {
       <ConfirmSheet
         visible={dialog?.type === 'deleteSession'}
         title="Hapus sesi ini?"
-        message={`Sesi "${dialog?.type === 'deleteSession' ? dialog.session.judul : ''}" akan dihapus permanen. Data presensi yang sudah tercatat tidak ikut dihapus.${dialogError && dialog?.type === 'deleteSession' ? `\n\n${dialogError}` : ''}`}
+        message={`Sesi "${dialog?.type === 'deleteSession' ? dialog.session.judul : ''}" beserta data presensi dan pengajuan izin pada sesi ini akan dihapus permanen.${dialogError && dialog?.type === 'deleteSession' ? `\n\n${dialogError}` : ''}`}
         confirmLabel="Ya, Hapus Sesi"
         loading={busy}
         onConfirm={() => dialog?.type === 'deleteSession' && void run(() => deleteSession(dialog.session.id))}
@@ -400,6 +409,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   sessionActions: { justifyContent: 'center', gap: 6, alignItems: 'flex-end' },
+  sessionErrorBox: { gap: 6, alignItems: 'flex-start' },
   linkButton: { paddingVertical: 4, paddingHorizontal: 6 },
   linkText: { fontSize: 13, fontWeight: '700', color: colors.asisten },
   dangerLink: { paddingVertical: 4, paddingHorizontal: 6 },

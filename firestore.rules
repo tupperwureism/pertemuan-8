@@ -41,6 +41,24 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/classes/$(classId));
     }
 
+    function classData(classId) {
+      return get(/databases/$(database)/documents/classes/$(classId)).data;
+    }
+
+    function isClassAsisten(classId) {
+      return isAsisten()
+        && classExists(classId)
+        && request.auth.uid in classData(classId).assistantIds;
+    }
+
+    function attendancePath(sessionId, uid) {
+      return /databases/$(database)/documents/attendances/$(sessionId + '_' + uid);
+    }
+
+    function permissionPath(sessionId, uid) {
+      return /databases/$(database)/documents/permissions/$(sessionId + '_' + uid);
+    }
+
     function shortText(value, maxLen) {
       return value is string && value.size() >= 1 && value.size() <= maxLen;
     }
@@ -98,7 +116,8 @@ service cloud.firestore {
     }
 
     match /classes/{classId} {
-      allow read: if isAsisten() || isMember(classId);
+      allow read: if (isAsisten() && request.auth.uid in resource.data.assistantIds)
+        || isMember(classId);
 
       allow create: if isAsisten()
         && validClassFields(request.resource.data)
@@ -106,29 +125,31 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time;
 
       allow update: if isAsisten()
+        && request.auth.uid in resource.data.assistantIds
         && validClassFields(request.resource.data)
+        && request.auth.uid in request.resource.data.assistantIds
         && request.resource.data.createdAt == resource.data.createdAt;
 
-      allow delete: if isAsisten();
+      allow delete: if isAsisten()
+        && request.auth.uid in resource.data.assistantIds;
     }
 
     // ------------------------------------------------------ classMembers
 
     match /classMembers/{memberId} {
-      allow read: if isAsisten()
-        || (signedIn() && resource.data.uid == request.auth.uid);
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid)
+        || isClassAsisten(resource.data.classId);
 
-      allow create: if isAsisten()
+      allow create: if isClassAsisten(request.resource.data.classId)
         && request.resource.data.keys().hasOnly(['classId', 'uid', 'role', 'joinedAt'])
         && request.resource.data.keys().hasAll(['classId', 'uid', 'role', 'joinedAt'])
         && memberId == request.resource.data.classId + '_' + request.resource.data.uid
         && request.resource.data.role in ['praktikan', 'asisten']
-        && classExists(request.resource.data.classId)
         && exists(profilePath(request.resource.data.uid))
         && request.resource.data.joinedAt == request.time;
 
       allow update: if false;
-      allow delete: if isAsisten();
+      allow delete: if isClassAsisten(resource.data.classId);
     }
 
     // ---------------------------------------------------------- sessions
@@ -151,33 +172,33 @@ service cloud.firestore {
     }
 
     match /sessions/{sessionId} {
-      allow read: if isAsisten() || isMember(resource.data.classId);
+      allow read: if isMember(resource.data.classId)
+        || isClassAsisten(resource.data.classId);
 
-      allow create: if isAsisten()
+      allow create: if isClassAsisten(request.resource.data.classId)
         && validSessionFields(request.resource.data)
         && request.resource.data.status == 'BELUM_DIBUKA'
         && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time
-        && classExists(request.resource.data.classId);
+        && request.resource.data.createdAt == request.time;
 
       // Status hanya maju: BELUM_DIBUKA -> DIBUKA -> DITUTUP. Identitas sesi terkunci.
-      allow update: if isAsisten()
+      allow update: if isClassAsisten(resource.data.classId)
         && validSessionFields(request.resource.data)
         && request.resource.data.classId == resource.data.classId
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.createdAt == resource.data.createdAt
         && validTransition(resource.data.status, request.resource.data.status);
 
-      allow delete: if isAsisten();
+      allow delete: if isClassAsisten(resource.data.classId);
     }
 
     // ------------------------------------------------------- attendances
     // ID = sessionId_uid. Praktikan create sekali ketika sesi DIBUKA; tidak ada update.
-    // Rekap oleh asisten membaca seluruh dokumen; praktikan hanya dokumen miliknya.
+    // Ditolak bila praktikan memiliki izin PENDING/APPROVED pada sesi yang sama.
 
     match /attendances/{attendanceId} {
-      allow read: if isAsisten()
-        || (signedIn() && resource.data.praktikanUid == request.auth.uid);
+      allow read: if (signedIn() && resource.data.praktikanUid == request.auth.uid)
+        || isClassAsisten(resource.data.classId);
 
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly(
@@ -192,16 +213,18 @@ service cloud.firestore {
                 && request.resource.data.catatan.size() <= 500))
         && sessionData(request.resource.data.sessionId).status == 'DIBUKA'
         && sessionData(request.resource.data.sessionId).classId == request.resource.data.classId
-        && isMember(request.resource.data.classId);
+        && isMember(request.resource.data.classId)
+        && (!exists(permissionPath(request.resource.data.sessionId, request.auth.uid))
+            || get(permissionPath(request.resource.data.sessionId, request.auth.uid)).data.status == 'REJECTED');
 
       allow update: if false;
-      // Asisten boleh menghapus hanya untuk pembersihan data (mis. sesi dihapus).
-      allow delete: if isAsisten();
+      // Asisten kelas boleh menghapus hanya untuk pembersihan data (mis. sesi dihapus).
+      allow delete: if isClassAsisten(resource.data.classId);
     }
 
     // ------------------------------------------------------- permissions
     // ID = sessionId_uid. Praktikan create/baca miliknya dan hanya mengisi hasil klasifikasi AI;
-    // keputusan APPROVED/REJECTED hanya oleh asisten. (Field aiRaw opsional untuk debug Programmer 2.)
+    // ditolak bila sudah tercatat hadir. Keputusan APPROVED/REJECTED hanya oleh asisten kelas.
 
     function validAiFields(data) {
       return data.aiStatus in ['PENDING', 'SUCCEEDED', 'FAILED']
@@ -212,8 +235,8 @@ service cloud.firestore {
     }
 
     match /permissions/{permissionId} {
-      allow read: if isAsisten()
-        || (signedIn() && resource.data.praktikanUid == request.auth.uid);
+      allow read: if (signedIn() && resource.data.praktikanUid == request.auth.uid)
+        || isClassAsisten(resource.data.classId);
 
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly(
@@ -233,11 +256,12 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && sessionData(request.resource.data.sessionId).classId == request.resource.data.classId
-        && isMember(request.resource.data.classId);
+        && isMember(request.resource.data.classId)
+        && !exists(attendancePath(request.resource.data.sessionId, request.auth.uid));
 
       allow update: if
-        // Keputusan asisten: mengubah status + metadata review saja.
-        (isAsisten()
+        // Keputusan asisten kelas: mengubah status + metadata review saja.
+        (isClassAsisten(resource.data.classId)
           && resource.data.status == 'PENDING'
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['status', 'reviewedBy', 'reviewedAt', 'updatedAt'])
@@ -255,7 +279,7 @@ service cloud.firestore {
           && validAiFields(request.resource.data)
           && request.resource.data.updatedAt == request.time);
 
-      allow delete: if isAsisten();
+      allow delete: if isClassAsisten(resource.data.classId);
     }
 
     // Deny-by-default untuk path lain.

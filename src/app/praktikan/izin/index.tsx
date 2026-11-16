@@ -14,8 +14,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import SentimentResultCard from '@/components/SentimentResultCard';
 import { useAuth } from '@/context/AuthContext';
 import { getClassById } from '@/services/attendanceService';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import {
+  canRetryPermissionAi,
+  isUnknownVocabularyAi,
   retryPermissionAi,
   subscribePermissionsForUser,
   toSentimentResultFromDoc,
@@ -73,7 +75,7 @@ export default function PraktikanPermissionListScreen() {
         setLoading(false);
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );
@@ -126,7 +128,7 @@ export default function PraktikanPermissionListScreen() {
     try {
       await retryPermissionAi(item.id, item.alasan);
     } catch (err) {
-      Alert.alert('Gagal', friendlyError(err));
+      Alert.alert('Gagal', getErrorMessage(err));
     } finally {
       setRetryingId(null);
     }
@@ -221,7 +223,19 @@ export default function PraktikanPermissionListScreen() {
 
                   <SentimentResultCard result={toSentimentResultFromDoc(item)} />
 
-                  {item.status === 'PENDING' && item.aiStatus === 'FAILED' ? (
+                  {item.status === 'PENDING' && !toSentimentResultFromDoc(item) ? (
+                    <Text style={styles.aiHintText}>
+                      Analisis sentimen AI belum tersimpan. Anda dapat menjalankannya ulang di bawah ini.
+                    </Text>
+                  ) : null}
+
+                  {isUnknownVocabularyAi(item) ? (
+                    <Text style={styles.aiHintText}>
+                      Kata-kata pada alasan belum terdapat pada kosakata model sentimen lokal. Pengajuan tetap dapat diperiksa asisten.
+                    </Text>
+                  ) : null}
+
+                  {canRetryPermissionAi(item) ? (
                     <Pressable
                       style={styles.retryButton}
                       onPress={() => handleRetry(item)}
@@ -366,6 +380,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   retryButtonText: { color: '#1D4ED8', fontSize: 13, fontWeight: '800' },
+  aiHintText: { color: '#64748B', fontSize: 12, lineHeight: 18 },
   cardFooter: {
     borderTopColor: '#F1F5F9',
     borderTopWidth: 1,

@@ -5,13 +5,11 @@ import {
   doc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
   where,
-  writeBatch,
 } from '@react-native-firebase/firestore';
 
 import {
@@ -24,7 +22,7 @@ import {
   type UserRole,
 } from '@/types/firebase';
 
-import { firestore, requireUid, toError } from './firebase';
+import { commitBatchDeletes, firestore, requireUid, toError } from './firebase';
 
 export interface ClassInput {
   nama: string;
@@ -45,14 +43,21 @@ function toMember(snap: { id: string; data(): unknown }): ClassMemberDoc {
 
 // ------------------------------------------------------------------ Kelas
 
-/** Asisten: semua kelas. */
+/** Asisten: kelas tempat UID asisten terdaftar pada assistantIds. */
 export function subscribeClasses(
   callback: (classes: ClassDoc[]) => void,
   onError: ErrorCallback,
 ): Unsubscribe {
+  let uid: string;
+  try {
+    uid = requireUid();
+  } catch (error) {
+    onError(toError(error));
+    return () => undefined;
+  }
   return onSnapshot(
-    query(classesCol(), orderBy('nama', 'asc')),
-    (snap) => callback(snap.docs.map(toClass)),
+    query(classesCol(), where('assistantIds', 'array-contains', uid)),
+    (snap) => callback(snap.docs.map(toClass).sort((a, b) => a.nama.localeCompare(b.nama))),
     (error) => onError(toError(error)),
   );
 }
@@ -155,22 +160,26 @@ export async function updateClass(classId: string, input: ClassInput): Promise<v
 }
 
 /**
- * Menghapus kelas beserta keanggotaan dan sesinya (batch, maks 500 operasi).
- * Presensi/izin yang sudah ada tidak dihapus di sini.
+ * Menghapus kelas beserta seluruh data terkait (presensi, izin, keanggotaan, dan sesi)
+ * secara bertahap agar tidak menyisakan data yatim maupun melampaui batas batch Firestore.
+ * Dokumen anak dihapus terlebih dahulu agar rule isClassAsisten(classId) tetap terpenuhi.
  */
 export async function deleteClass(classId: string): Promise<void> {
-  const [members, sessions] = await Promise.all([
+  const db = firestore();
+  const [attendances, permissions, members, sessions] = await Promise.all([
+    getDocs(query(collection(db, COLLECTIONS.attendances), where('classId', '==', classId))),
+    getDocs(query(collection(db, COLLECTIONS.permissions), where('classId', '==', classId))),
     getDocs(query(membersCol(), where('classId', '==', classId))),
-    getDocs(query(collection(firestore(), COLLECTIONS.sessions), where('classId', '==', classId))),
+    getDocs(query(collection(db, COLLECTIONS.sessions), where('classId', '==', classId))),
   ]);
-  const refs = [...members.docs, ...sessions.docs].map((d) => d.ref);
-  if (refs.length > 498) {
-    throw new Error('Kelas memiliki terlalu banyak data terkait. Hapus sesi/anggota secara bertahap.');
-  }
-  const batch = writeBatch(firestore());
-  refs.forEach((ref) => batch.delete(ref));
-  batch.delete(doc(firestore(), COLLECTIONS.classes, classId));
-  await batch.commit();
+  const childRefs = [
+    ...attendances.docs,
+    ...permissions.docs,
+    ...members.docs,
+    ...sessions.docs,
+  ].map((d) => d.ref);
+  await commitBatchDeletes(childRefs);
+  await deleteDoc(doc(db, COLLECTIONS.classes, classId));
 }
 
 // ------------------------------------------------------------ Keanggotaan

@@ -1,11 +1,10 @@
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
-  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -24,7 +23,15 @@ import {
   type UserDoc,
 } from '@/types/firebase';
 
-import { firestore, requireUid, toError, userRef, withId } from './firebase';
+import {
+  commitBatchDeletes,
+  firestore,
+  requireUid,
+  subscribePerClassQuery,
+  toError,
+  userRef,
+  withId,
+} from './firebase';
 
 export interface SessionInput {
   classId: string;
@@ -50,38 +57,16 @@ function sortByStart(sessions: SessionDoc[]): SessionDoc[] {
 
 /**
  * Jadwal untuk pengguna yang login (signature kontrak tidak berubah).
- * - Asisten: seluruh sesi.
- * - Praktikan: hanya sesi pada kelas tempat ia menjadi anggota. Security Rules bukan filter,
- *   jadi service menurunkan daftar classId dari classMembers milik UID login lalu membuat satu
- *   listener per kelas (equality query, aman untuk rules). Semua listener dibersihkan oleh
- *   fungsi unsubscribe yang dikembalikan.
+ * - Asisten: sesi pada kelas tempat ia terdaftar pada `assistantIds`.
+ * - Praktikan: sesi pada kelas tempat ia menjadi anggota (`classMembers`).
+ * Listener dipecah per classId agar sesuai Security Rules yang membatasi akses per kelas.
  */
 export function subscribeSessions(
   callback: (sessions: SessionDoc[]) => void,
   onError: ErrorCallback,
 ): Unsubscribe {
   let cancelled = false;
-  let stopRoot: Unsubscribe | null = null;
-  const perClass = new Map<string, Unsubscribe>();
-  const results = new Map<string, SessionDoc[]>();
-  const delivered = new Set<string>();
-
-  // Emit hanya setelah SETIAP listener kelas mengirim snapshot pertamanya, agar UI tidak
-  // sempat menampilkan keadaan kosong palsu sebelum data tiba.
-  const emit = () => {
-    if (cancelled) return;
-    for (const classId of perClass.keys()) {
-      if (!delivered.has(classId)) return;
-    }
-    callback(sortByStart([...results.values()].flat()));
-  };
-
-  const clearClassListeners = () => {
-    perClass.forEach((unsub) => unsub());
-    perClass.clear();
-    results.clear();
-    delivered.clear();
-  };
+  let stopFanOut: Unsubscribe | null = null;
 
   const start = async () => {
     try {
@@ -91,52 +76,20 @@ export function subscribeSessions(
       const profile = withId<UserDoc>(profileSnap);
       if (!profile) throw new Error('Profil pengguna tidak ditemukan.');
 
-      if (profile.role === 'asisten') {
-        stopRoot = onSnapshot(
-          query(sessionsCol(), orderBy('startsAt', 'asc')),
-          (snap) => {
-            if (!cancelled) callback(snap.docs.map(toSession));
-          },
-          (error) => onError(toError(error)),
-        );
-        return;
-      }
+      const rootQuery =
+        profile.role === 'asisten'
+          ? query(collection(firestore(), COLLECTIONS.classes), where('assistantIds', 'array-contains', uid))
+          : query(collection(firestore(), COLLECTIONS.classMembers), where('uid', '==', uid));
 
-      stopRoot = onSnapshot(
-        query(collection(firestore(), COLLECTIONS.classMembers), where('uid', '==', uid)),
-        (membersSnap) => {
-          if (cancelled) return;
-          const classIds = new Set(membersSnap.docs.map((d) => d.data().classId as string));
-
-          // Hentikan listener kelas yang sudah tidak diikuti.
-          for (const [classId, unsub] of perClass) {
-            if (!classIds.has(classId)) {
-              unsub();
-              perClass.delete(classId);
-              results.delete(classId);
-              delivered.delete(classId);
-            }
-          }
-          // Mulai listener untuk kelas baru.
-          classIds.forEach((classId) => {
-            if (perClass.has(classId)) return;
-            perClass.set(
-              classId,
-              onSnapshot(
-                query(sessionsCol(), where('classId', '==', classId)),
-                (snap) => {
-                  results.set(classId, snap.docs.map(toSession));
-                  delivered.add(classId);
-                  emit();
-                },
-                (error) => onError(toError(error)),
-              ),
-            );
-          });
-          emit();
-        },
-        (error) => onError(toError(error)),
-      );
+      stopFanOut = subscribePerClassQuery<SessionDoc>({
+        rootQuery,
+        extractClassId: (d) => (profile.role === 'asisten' ? d.id : (d.data().classId as string)),
+        buildClassQuery: (classId) => query(sessionsCol(), where('classId', '==', classId)),
+        mapDoc: toSession,
+        sortItems: sortByStart,
+        callback,
+        onError,
+      });
     } catch (error) {
       if (!cancelled) onError(toError(error));
     }
@@ -146,9 +99,8 @@ export function subscribeSessions(
 
   return () => {
     cancelled = true;
-    stopRoot?.();
-    stopRoot = null;
-    clearClassListeners();
+    stopFanOut?.();
+    stopFanOut = null;
   };
 }
 
@@ -166,25 +118,52 @@ export function subscribeSession(
 }
 
 /**
- * Rekap kehadiran satu sesi secara real-time. Khusus asisten (rules: praktikan hanya
- * boleh membaca dokumen miliknya, jadi query tanpa filter praktikanUid ditolak).
- * attendanceService milik Programmer 2 tidak perlu menduplikasi fungsi ini.
+ * Rekap kehadiran satu sesi secara real-time untuk asisten kelas terkait.
+ * Menyertakan filter `classId` agar lolos validasi statis Security Rules `isClassAsisten(classId)`.
  */
 export function subscribeAttendances(
   sessionId: string,
   callback: (attendances: AttendanceDoc[]) => void,
   onError: ErrorCallback,
 ): Unsubscribe {
-  return onSnapshot(
-    query(collection(firestore(), COLLECTIONS.attendances), where('sessionId', '==', sessionId)),
-    (snap) =>
-      callback(
-        snap.docs
-          .map((d) => ({ ...(d.data() as Omit<AttendanceDoc, 'id'>), id: d.id }))
-          .sort((a, b) => (a.attendedAt?.toMillis() ?? Infinity) - (b.attendedAt?.toMillis() ?? Infinity)),
-      ),
-    (error) => onError(toError(error)),
-  );
+  let cancelled = false;
+  let unsub: Unsubscribe | null = null;
+
+  const start = async () => {
+    try {
+      const snap = await getDoc(sessionRef(sessionId));
+      if (cancelled) return;
+      const sess = withId<SessionDoc>(snap);
+      if (!sess) {
+        callback([]);
+        return;
+      }
+      unsub = onSnapshot(
+        query(
+          collection(firestore(), COLLECTIONS.attendances),
+          where('sessionId', '==', sessionId),
+          where('classId', '==', sess.classId),
+        ),
+        (attSnap) =>
+          callback(
+            attSnap.docs
+              .map((d) => ({ ...(d.data() as Omit<AttendanceDoc, 'id'>), id: d.id }))
+              .sort((a, b) => (a.attendedAt?.toMillis() ?? Infinity) - (b.attendedAt?.toMillis() ?? Infinity)),
+          ),
+        (error) => onError(toError(error)),
+      );
+    } catch (error) {
+      if (!cancelled) onError(toError(error));
+    }
+  };
+
+  void start();
+
+  return () => {
+    cancelled = true;
+    unsub?.();
+    unsub = null;
+  };
 }
 
 // ------------------------------------------------------------------ CRUD
@@ -221,8 +200,36 @@ export async function updateSession(
   });
 }
 
+/**
+ * Menghapus sesi beserta seluruh presensi dan pengajuan izin terkait agar tidak meninggalkan data yatim.
+ */
 export async function deleteSession(sessionId: string): Promise<void> {
-  await deleteDoc(sessionRef(sessionId));
+  const ref = sessionRef(sessionId);
+  const snap = await getDoc(ref);
+  const sess = withId<SessionDoc>(snap);
+  if (!sess) return;
+
+  const db = firestore();
+  const [attendances, permissions] = await Promise.all([
+    getDocs(
+      query(
+        collection(db, COLLECTIONS.attendances),
+        where('sessionId', '==', sessionId),
+        where('classId', '==', sess.classId),
+      ),
+    ),
+    getDocs(
+      query(
+        collection(db, COLLECTIONS.permissions),
+        where('sessionId', '==', sessionId),
+        where('classId', '==', sess.classId),
+      ),
+    ),
+  ]);
+
+  const refs = [...attendances.docs, ...permissions.docs].map((d) => d.ref);
+  refs.push(ref);
+  await commitBatchDeletes(refs);
 }
 
 // ------------------------------------------------------- Siklus hidup sesi

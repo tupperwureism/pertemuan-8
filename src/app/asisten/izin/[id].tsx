@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import SentimentResultCard from '@/components/SentimentResultCard';
 import { useAuth } from '@/context/AuthContext';
 import { subscribeClassById } from '@/services/attendanceService';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import { userRef } from '@/services/firebase';
 import {
   reviewPermission,
@@ -71,10 +71,15 @@ function getSentimentSummaryText(perm: PermissionDocWithMeta): string {
 export default function AsistenPermissionDetailScreen() {
   const { id: rawId } = useLocalSearchParams<{ id?: string | string[] }>();
   const permissionId = (Array.isArray(rawId) ? rawId[0] : rawId) ?? '';
+  return <AsistenPermissionDetailContent key={permissionId} permissionId={permissionId} />;
+}
+
+function AsistenPermissionDetailContent({ permissionId }: { permissionId: string }) {
   const { uid, role, status: authStatus } = useAuth();
 
   const [permission, setPermission] = useState<PermissionDocWithMeta | null>(null);
   const [student, setStudent] = useState<UserDoc | null>(null);
+  const [reviewer, setReviewer] = useState<UserDoc | null>(null);
   const [session, setSession] = useState<SessionDoc | null>(null);
   const [classDoc, setClassDoc] = useState<ClassDoc | null>(null);
 
@@ -100,7 +105,7 @@ export default function AsistenPermissionDetailScreen() {
         setLoading(false);
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );
@@ -139,6 +144,25 @@ export default function AsistenPermissionDetailScreen() {
     };
   }, [permission?.praktikanUid, role, uid]);
 
+  useEffect(() => {
+    const reviewerUid = permission?.reviewedBy;
+    if (!reviewerUid || !uid || role !== 'asisten') return;
+    let cancelled = false;
+
+    void getDoc(userRef(reviewerUid))
+      .then((snap) => {
+        if (cancelled) return;
+        if (snap.exists()) {
+          setReviewer(toUserDoc(snap.id, snap.data() as Record<string, unknown>));
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [permission?.reviewedBy, role, uid]);
+
   const handleConfirmDecision = async () => {
     if (!permission || !pendingDecision) return;
 
@@ -154,7 +178,7 @@ export default function AsistenPermissionDetailScreen() {
           : 'Pengajuan izin praktikan telah ditolak.',
       );
     } catch (error) {
-      const msg = friendlyError(error);
+      const msg = getErrorMessage(error);
       setErrorMessage(msg);
       Alert.alert('Gagal Menyimpan Keputusan', msg);
     } finally {
@@ -328,7 +352,7 @@ export default function AsistenPermissionDetailScreen() {
             </Text>
             <Text style={styles.decidedInfoText}>
               Diperiksa pada {formatTime(permission.reviewedAt)} oleh{' '}
-              {permission.reviewedBy ?? '-'}.
+              {reviewer ? `${reviewer.nama}${reviewer.nomorInduk ? ` (${reviewer.nomorInduk})` : ''}` : 'Asisten'}.
             </Text>
           </View>
         )}

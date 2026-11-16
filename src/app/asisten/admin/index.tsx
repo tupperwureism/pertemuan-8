@@ -15,7 +15,7 @@ import {
   ScreenHeader,
 } from '@/components/screen-kit';
 import { useVisibleClasses } from '@/hooks/use-firestore-data';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import { createClass } from '@/services/classService';
 import type { ClassDoc } from '@/types/firebase';
 
@@ -48,7 +48,7 @@ export default function AdminClassesScreen() {
       await createClass(form);
       setFormOpen(false);
     } catch (e) {
-      setFormError(friendlyError(e));
+      setFormError(getErrorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -71,7 +71,7 @@ export default function AdminClassesScreen() {
 
   const renderBody = () => {
     if (loading) return <LoadingState label="Memuat kelas…" />;
-    if (error) return <ErrorState message={error.message} onRetry={retry} />;
+    if (error) return <ErrorState message={getErrorMessage(error)} onRetry={retry} />;
     return (
       <FlatList
         data={classes ?? []}

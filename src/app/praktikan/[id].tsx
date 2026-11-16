@@ -23,7 +23,7 @@ import {
   subscribeClassById,
   subscribeMySessionAttendance,
 } from '@/services/attendanceService';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import {
   subscribeMySessionPermission,
   toSentimentResultFromDoc,
@@ -103,6 +103,10 @@ function formatSessionWindow(
 export default function PraktikanSessionDetail() {
   const { id } = useLocalSearchParams<{ id?: string | string[] }>();
   const sessionId = (Array.isArray(id) ? id[0] : id) ?? '';
+  return <PraktikanSessionDetailContent key={sessionId} sessionId={sessionId} />;
+}
+
+function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
   const { uid, profile, status: authStatus } = useAuth();
 
   const [session, setSession] = useState<SessionDoc | null>(null);
@@ -141,7 +145,7 @@ export default function PraktikanSessionDetail() {
         markReady();
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );
@@ -155,7 +159,7 @@ export default function PraktikanSessionDetail() {
         markReady();
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );
@@ -210,7 +214,10 @@ export default function PraktikanSessionDetail() {
   const studentNim = profile?.nomorInduk ?? (uid ? uid.slice(0, 8) : '-');
 
   const isSessionOpen = effectiveStatus === 'DIBUKA';
-  const canAttend = Boolean(uid && session && isSessionOpen && !attendance && !submitting);
+  const hasBlockingPermission = Boolean(permission && permission.status !== 'REJECTED');
+  const canAttend = Boolean(
+    uid && session && isSessionOpen && !attendance && !hasBlockingPermission && !submitting,
+  );
 
   const handleSubmitAttendance = async () => {
     if (!uid) {
@@ -228,8 +235,7 @@ export default function PraktikanSessionDetail() {
       await recordAttendance(sessionId, uid, catatan.trim() || undefined);
       setFeedbackVisible(true);
     } catch (err) {
-      const msg =
-        err instanceof Error && !('code' in err) ? err.message : friendlyError(err);
+      const msg = getErrorMessage(err);
       setErrorMessage(msg);
       Alert.alert('Gagal Presensi', msg);
     } finally {
@@ -261,13 +267,17 @@ export default function PraktikanSessionDetail() {
     );
   }
 
-  if (uid && !session && !errorMessage) {
+  if (uid && !session) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <View style={styles.centeredContainer}>
-          <Text style={styles.emptyTitle}>Sesi Tidak Ditemukan</Text>
+          <Text style={styles.emptyTitle}>
+            {errorMessage ? 'Sesi Tidak Dapat Dimuat' : 'Sesi Tidak Ditemukan'}
+          </Text>
           <Text style={styles.emptySubtitle}>
-            Sesi dengan ID &ldquo;{sessionId}&rdquo; tidak tersedia atau Anda bukan anggota kelas ini.
+            {errorMessage
+              ? errorMessage
+              : `Sesi dengan ID “${sessionId}” tidak tersedia atau Anda bukan anggota kelas ini.`}
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -379,23 +389,33 @@ export default function PraktikanSessionDetail() {
               <Text style={styles.inputLabel}>Catatan kehadiran (opsional)</Text>
               <TextInput
                 accessibilityLabel="Catatan kehadiran"
-                editable={isSessionOpen && !submitting}
+                editable={isSessionOpen && !hasBlockingPermission && !submitting}
                 maxLength={120}
                 multiline
                 onChangeText={setCatatan}
                 placeholder={
-                  isSessionOpen
-                    ? 'Contoh: Hadir tepat waktu'
-                    : 'Form tersedia saat sesi dibuka'
+                  hasBlockingPermission
+                    ? 'Presensi dinonaktifkan karena sudah mengajukan izin'
+                    : isSessionOpen
+                      ? 'Contoh: Hadir tepat waktu'
+                      : 'Form tersedia saat sesi dibuka'
                 }
                 placeholderTextColor="#98A2B3"
-                style={[styles.input, !isSessionOpen && styles.inputDisabled]}
+                style={[styles.input, (!isSessionOpen || hasBlockingPermission) && styles.inputDisabled]}
                 textAlignVertical="top"
                 value={catatan}
               />
               <Text style={styles.characterCount}>{catatan.length}/120</Text>
 
-              {!isSessionOpen ? (
+              {hasBlockingPermission ? (
+                <View style={styles.disabledNotice}>
+                  <Text style={styles.disabledNoticeText}>
+                    {permission?.status === 'APPROVED'
+                      ? 'Presensi tidak tersedia karena pengajuan izin Anda pada sesi ini sudah diterima.'
+                      : 'Presensi dinonaktifkan karena Anda sudah mengajukan izin yang sedang menunggu pemeriksaan.'}
+                  </Text>
+                </View>
+              ) : !isSessionOpen ? (
                 <View style={styles.disabledNotice}>
                   <Text style={styles.disabledNoticeText}>
                     {effectiveStatus === 'BELUM_DIBUKA'
@@ -466,6 +486,12 @@ export default function PraktikanSessionDetail() {
                 style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}>
                 <Text style={styles.secondaryButtonText}>Lihat semua status izin saya</Text>
               </Pressable>
+            </View>
+          ) : attendance ? (
+            <View style={styles.permissionPromptCard}>
+              <Text style={styles.permissionPromptText}>
+                Anda sudah tercatat hadir pada sesi ini sehingga tidak dapat mengajukan izin ketidakhadiran.
+              </Text>
             </View>
           ) : (
             <View style={styles.permissionPromptCard}>

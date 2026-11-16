@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ErrorBanner, ErrorState, LoadingState } from '@/components/screen-kit';
 import { useSession, useSessionRecap, useUserProfiles, useVisibleClasses } from '@/hooks/use-firestore-data';
 import { formatClock, formatSessionTime } from '@/lib/format';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import { closeSession, openSession } from '@/services/sessionService';
 import type { AttendanceDoc, SessionStatus } from '@/types/firebase';
 
@@ -50,7 +50,7 @@ export default function AsistenSessionDetailScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <ErrorState message={error.message} onRetry={retry} />
+        <ErrorState message={getErrorMessage(error)} onRetry={retry} />
       </SafeAreaView>
     );
   }
@@ -108,7 +108,7 @@ export default function AsistenSessionDetailScreen() {
       setIsModalVisible(false);
     } catch (e) {
       setIsModalVisible(false);
-      setActionError(e instanceof Error && e.message ? e.message : friendlyError(e));
+      setActionError(getErrorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -281,7 +281,7 @@ export default function AsistenSessionDetailScreen() {
 
             {/* SRS-04 requires an explicit Empty State when daftarHadir is empty. */}
             {recapError ? (
-              <ErrorBanner message={recapError.message} />
+              <ErrorBanner message={getErrorMessage(recapError)} />
             ) : recap.length === 0 ? (
               <View style={styles.emptyStateContainer}>
                 <Text style={styles.emptyStateText}>

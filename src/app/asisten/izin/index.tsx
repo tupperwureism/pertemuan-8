@@ -1,4 +1,3 @@
-import { getDoc } from '@react-native-firebase/firestore';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -12,21 +11,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/context/AuthContext';
-import { friendlyError } from '@/services/authService';
-import { subscribeClasses } from '@/services/classService';
-import { userRef } from '@/services/firebase';
+import { useSessions, useUserProfiles, useVisibleClasses } from '@/hooks/use-firestore-data';
+import { getErrorMessage } from '@/services/authService';
 import {
   subscribeAllPermissions,
   type PermissionDocWithMeta,
 } from '@/services/permissionService';
-import { subscribeSessions } from '@/services/sessionService';
-import { toUserDoc } from '@/services/userService';
 import type {
   ClassDoc,
   FirestoreTimestamp,
   PermissionStatus,
   SessionDoc,
-  UserDoc,
 } from '@/types/firebase';
 
 type FilterStatus = 'SEMUA' | PermissionStatus;
@@ -61,95 +56,53 @@ export default function AsistenPermissionListScreen() {
   const { uid, role, status: authStatus } = useAuth();
 
   const [permissions, setPermissions] = useState<PermissionDocWithMeta[]>([]);
-  const [sessionMap, setSessionMap] = useState<Record<string, SessionDoc>>({});
-  const [classMap, setClassMap] = useState<Record<string, ClassDoc>>({});
-  const [userMap, setUserMap] = useState<Record<string, UserDoc>>({});
   const [selectedFilter, setSelectedFilter] = useState<FilterStatus>('SEMUA');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const canSubscribe = Boolean(uid && role === 'asisten');
+  const { data: sessionsData, error: sessionsError } = useSessions();
+  const { data: classesData, error: classesError } = useVisibleClasses(role);
+  const userMap = useUserProfiles(permissions.map((p) => p.praktikanUid));
+
+  const sessionMap = useMemo(() => {
+    const next: Record<string, SessionDoc> = {};
+    (sessionsData ?? []).forEach((s) => {
+      next[s.id] = s;
+    });
+    return next;
+  }, [sessionsData]);
+
+  const classMap = useMemo(() => {
+    const next: Record<string, ClassDoc> = {};
+    (classesData ?? []).forEach((c) => {
+      next[c.id] = c;
+    });
+    return next;
+  }, [classesData]);
 
   useEffect(() => {
     if (!canSubscribe) {
       return;
     }
 
-    const unsubPermissions = subscribeAllPermissions(
+    return subscribeAllPermissions(
       (items) => {
         setPermissions(items);
         setErrorMessage(null);
         setLoading(false);
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );
-
-    const unsubSessions = subscribeSessions(
-      (sessions) => {
-        const next: Record<string, SessionDoc> = {};
-        sessions.forEach((s) => {
-          next[s.id] = s;
-        });
-        setSessionMap(next);
-      },
-      () => undefined,
-    );
-
-    const unsubClasses = subscribeClasses(
-      (classes) => {
-        const next: Record<string, ClassDoc> = {};
-        classes.forEach((c) => {
-          next[c.id] = c;
-        });
-        setClassMap(next);
-      },
-      () => undefined,
-    );
-
-    return () => {
-      unsubPermissions();
-      unsubSessions();
-      unsubClasses();
-    };
   }, [canSubscribe]);
 
-  // Ambil profil praktikan untuk setiap praktikanUid pada daftar izin
-  useEffect(() => {
-    if (!uid || role !== 'asisten' || permissions.length === 0) return;
-    let cancelled = false;
-    const uniqueUids = Array.from(
-      new Set(permissions.map((p) => p.praktikanUid).filter(Boolean)),
-    );
-
-    void Promise.all(
-      uniqueUids.map(async (targetUid) => {
-        try {
-          const snap = await getDoc(userRef(targetUid));
-          if (!snap.exists()) return [targetUid, null] as const;
-          return [
-            targetUid,
-            toUserDoc(snap.id, snap.data() as Record<string, unknown>),
-          ] as const;
-        } catch {
-          return [targetUid, null] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (cancelled) return;
-      const next: Record<string, UserDoc> = {};
-      entries.forEach(([targetUid, docData]) => {
-        if (docData) next[targetUid] = docData;
-      });
-      setUserMap((prev) => ({ ...prev, ...next }));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [permissions, role, uid]);
+  const displayError =
+    errorMessage ??
+    (sessionsError ? getErrorMessage(sessionsError) : null) ??
+    (classesError ? getErrorMessage(classesError) : null);
 
   const filteredPermissions = useMemo(() => {
     if (selectedFilter === 'SEMUA') return permissions;
@@ -229,10 +182,10 @@ export default function AsistenPermissionListScreen() {
           })}
         </View>
 
-        {errorMessage ? (
+        {displayError ? (
           <View style={styles.errorCard}>
             <Text style={styles.errorTitle}>Gagal memuat daftar izin</Text>
-            <Text style={styles.errorText}>{errorMessage}</Text>
+            <Text style={styles.errorText}>{displayError}</Text>
           </View>
         ) : null}
 

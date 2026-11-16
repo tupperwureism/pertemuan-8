@@ -12,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/context/AuthContext';
 import { getClassById, subscribeMyAttendances } from '@/services/attendanceService';
-import { friendlyError } from '@/services/authService';
+import { getErrorMessage } from '@/services/authService';
 import { subscribeSessions } from '@/services/sessionService';
 import type {
   AttendanceDoc,
@@ -62,7 +62,7 @@ export default function AttendanceHistoryScreen() {
         setLoading(false);
       },
       (err) => {
-        setErrorMessage(friendlyError(err));
+        setErrorMessage(getErrorMessage(err));
         setLoading(false);
       },
     );

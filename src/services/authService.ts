@@ -7,9 +7,19 @@ import {
 import { firebaseAuth } from './firebase';
 import { createUserProfile } from './userService';
 
+function extractErrorCode(error: unknown): string {
+  const direct = (error as { code?: string } | null)?.code;
+  if (typeof direct === 'string' && direct.length > 0) return direct;
+  if (error instanceof Error) {
+    const bracketed = /^\[([^\]]+)\]/.exec(error.message);
+    if (bracketed) return bracketed[1];
+  }
+  return '';
+}
+
 /** Terjemahan kode error Firebase Auth/Firestore ke pesan ramah. */
 export function friendlyError(error: unknown): string {
-  const code = (error as { code?: string } | null)?.code ?? '';
+  const code = extractErrorCode(error);
   switch (code) {
     case 'auth/invalid-email':
       return 'Format email tidak valid.';
@@ -26,16 +36,42 @@ export function friendlyError(error: unknown): string {
       return 'Kata sandi terlalu lemah. Gunakan minimal 6 karakter.';
     case 'auth/network-request-failed':
     case 'firestore/unavailable':
-      return 'Tidak ada koneksi internet. Periksa jaringan lalu coba lagi.';
+    case 'unavailable':
+    case 'firestore/deadline-exceeded':
+    case 'deadline-exceeded':
+      return 'Tidak ada koneksi atau layanan sedang sibuk. Periksa jaringan lalu coba lagi.';
     case 'auth/too-many-requests':
       return 'Terlalu banyak percobaan. Tunggu beberapa saat lalu coba lagi.';
     case 'auth/operation-not-allowed':
       return 'Login email/password belum diaktifkan di Firebase Console.';
     case 'firestore/permission-denied':
+    case 'permission-denied':
       return 'Anda tidak memiliki izin untuk tindakan ini.';
+    case 'firestore/not-found':
+    case 'not-found':
+      return 'Data tidak ditemukan atau sudah dihapus.';
+    case 'firestore/aborted':
+    case 'aborted':
+    case 'firestore/failed-precondition':
+    case 'failed-precondition':
+      return 'Perubahan gagal karena data baru saja berubah. Muat ulang lalu coba lagi.';
+    case 'firestore/unauthenticated':
+    case 'unauthenticated':
+      return 'Sesi login tidak aktif. Silakan masuk kembali.';
     default:
       return 'Terjadi kesalahan. Silakan coba lagi.';
   }
+}
+
+/** Mengubah error menjadi pesan ramah UI (mempertahankan pesan validasi lokal, menerjemahkan error Firebase). */
+export function getErrorMessage(error: unknown): string {
+  if (extractErrorCode(error)) {
+    return friendlyError(error);
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return friendlyError(error);
 }
 
 export async function signIn(email: string, password: string): Promise<void> {

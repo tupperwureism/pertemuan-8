@@ -101,6 +101,21 @@ export default function AdminClassesScreen() {
           </Pressable>
         }
       />
+
+      <Pressable
+        accessibilityRole="button"
+        style={({ pressed }) => [styles.labBanner, pressed && styles.cardPressed]}
+        onPress={() => router.push('/asisten/admin/lab' as Href)}
+      >
+        <View style={styles.labBannerCopy}>
+          <Text style={styles.labBannerTitle}>Kelola Laboratorium</Text>
+          <Text style={styles.labBannerSubtitle}>
+            Atur koordinat lokasi dan radius presensi tiap lab
+          </Text>
+        </View>
+        <Text style={styles.cardAction}>Buka →</Text>
+      </Pressable>
+
       {renderBody()}
 
       <FormSheet visible={formOpen} title="Tambah Kelas" onClose={() => setFormOpen(false)}>
@@ -139,4 +154,20 @@ const styles = StyleSheet.create({
   cardAction: { fontSize: 13, fontWeight: '700', color: colors.asisten, marginTop: 4 },
   addButton: { backgroundColor: colors.asisten, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 },
   addButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  labBanner: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  labBannerCopy: { flex: 1, gap: 2 },
+  labBannerTitle: { fontSize: 15, fontWeight: '800', color: colors.text },
+  labBannerSubtitle: { fontSize: 12, color: colors.textMuted },
 });

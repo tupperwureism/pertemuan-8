@@ -29,6 +29,13 @@ const CLASS_ID = 'kelas1';
 const OPEN_SESSION = 'sesiBuka';
 const CLOSED_SESSION = 'sesiTutup';
 const NEW_SESSION = 'sesiBaru';
+const LAB_ID = 'lab1';
+const LAB_SESSION = 'sesiLab';
+const MISSING_LAB_SESSION = 'sesiLabHilang';
+const LAB_LAT = -7.05;
+const LAB_LNG = 110.44;
+const LAB_RADIUS = 100;
+const LAB_COS_LAT = Math.cos((LAB_LAT * Math.PI) / 180);
 
 let env;
 
@@ -103,6 +110,29 @@ beforeEach(async () => {
     });
     await setDoc(doc(db, 'sessions', OPEN_SESSION), session('DIBUKA'));
     await setDoc(doc(db, 'sessions', CLOSED_SESSION), session('DITUTUP'));
+    await setDoc(doc(db, 'labs', LAB_ID), {
+      nama: 'Lab Mobile 1',
+      gedung: 'Gedung Informatika Lt. 2',
+      deskripsi: 'Lab uji Sprint 3',
+      latitude: LAB_LAT,
+      longitude: LAB_LNG,
+      radiusMeter: LAB_RADIUS,
+      cosLat: LAB_COS_LAT,
+      createdBy: 'ast1',
+      createdAt: ts(0),
+      updatedAt: ts(0),
+    });
+    await setDoc(doc(db, 'sessions', LAB_SESSION), { ...session('DIBUKA'), labId: LAB_ID });
+    await setDoc(doc(db, 'sessions', MISSING_LAB_SESSION), {
+      ...session('DIBUKA'),
+      labId: 'labTidakAda',
+    });
+    await setDoc(doc(db, 'pushTokens', 'prkA'), {
+      uid: 'prkA',
+      token: 'ExponentPushToken[prkA]',
+      platform: 'android',
+      updatedAt: ts(0),
+    });
     await setDoc(doc(db, 'permissions', `${OPEN_SESSION}_prkA`), {
       sessionId: OPEN_SESSION,
       classId: CLASS_ID,
@@ -317,6 +347,186 @@ describe('izin', () => {
       sessionId: OPEN_SESSION, classId: CLASS_ID, praktikanUid: 'prkB', alasan: 'Sakit',
       aiStatus: 'PENDING', aiLabel: null, aiConfidence: null, status: 'PENDING',
       reviewedBy: null, reviewedAt: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+  });
+});
+
+describe('labs (Sprint 3)', () => {
+  const validLab = (createdBy = 'ast1') => ({
+    nama: 'Lab AI',
+    gedung: 'Gedung E Lt. 3',
+    deskripsi: 'Laboratorium komputer',
+    latitude: LAB_LAT,
+    longitude: LAB_LNG,
+    radiusMeter: 150,
+    cosLat: LAB_COS_LAT,
+    createdBy,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  it('pengguna login dapat membaca labs; pengguna anonim ditolak', async () => {
+    await assertSucceeds(getDoc(doc(praktikanA(), 'labs', LAB_ID)));
+    await assertSucceeds(getDocs(collection(asisten(), 'labs')));
+    await assertFails(getDoc(doc(anon(), 'labs', LAB_ID)));
+    await assertFails(getDocs(collection(anon(), 'labs')));
+  });
+
+  it('asisten dapat membuat, mengubah, dan menghapus lab dengan data valid', async () => {
+    const ref = doc(asisten(), 'labs', 'labBaru');
+    await assertSucceeds(setDoc(ref, validLab('ast1')));
+    await assertSucceeds(updateDoc(ref, { radiusMeter: 200, updatedAt: serverTimestamp() }));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
+  it('praktikan tidak dapat menulis atau menghapus lab', async () => {
+    await assertFails(setDoc(doc(praktikanA(), 'labs', 'labPrk'), validLab('prkA')));
+    await assertFails(updateDoc(doc(praktikanA(), 'labs', LAB_ID), { radiusMeter: 50, updatedAt: serverTimestamp() }));
+    await assertFails(deleteDoc(doc(praktikanA(), 'labs', LAB_ID)));
+  });
+
+  it('menolak lab dengan radius, koordinat, cosLat, atau metadata tidak valid', async () => {
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labKecil'), { ...validLab(), radiusMeter: 5 }));
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labBesar'), { ...validLab(), radiusMeter: 1500 }));
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labLat'), { ...validLab(), latitude: 95 }));
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labLng'), { ...validLab(), longitude: -185 }));
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labCos'), { ...validLab(), cosLat: 0 }));
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labCreator'), validLab('ast2')));
+    await assertFails(updateDoc(doc(asisten(), 'labs', LAB_ID), { createdAt: ts(5), updatedAt: serverTimestamp() }));
+  });
+});
+
+describe('pushTokens (Sprint 3)', () => {
+  it('pemilik dapat get, create, update, dan delete token miliknya', async () => {
+    const refA = doc(praktikanA(), 'pushTokens', 'prkA');
+    const refB = doc(praktikanB(), 'pushTokens', 'prkB');
+    await assertSucceeds(getDoc(refA));
+    await assertSucceeds(setDoc(refB, {
+      uid: 'prkB',
+      token: 'ExponentPushToken[prkB-1]',
+      platform: 'android',
+      updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(refB, {
+      token: 'ExponentPushToken[prkB-2]',
+      updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(deleteDoc(refB));
+  });
+
+  it('asisten boleh get token per UID tetapi ditolak saat query list', async () => {
+    await assertSucceeds(getDoc(doc(asisten(), 'pushTokens', 'prkA')));
+    await assertFails(getDocs(collection(asisten(), 'pushTokens')));
+  });
+
+  it('praktikan lain, asisten (delete), dan anonim ditolak', async () => {
+    await assertFails(getDoc(doc(praktikanB(), 'pushTokens', 'prkA')));
+    await assertFails(getDocs(collection(praktikanB(), 'pushTokens')));
+    await assertFails(setDoc(doc(praktikanB(), 'pushTokens', 'prkA'), {
+      uid: 'prkA',
+      token: 'ExponentPushToken[bajakan]',
+      platform: 'android',
+      updatedAt: serverTimestamp(),
+    }));
+    await assertFails(deleteDoc(doc(asisten(), 'pushTokens', 'prkA')));
+    await assertFails(getDoc(doc(anon(), 'pushTokens', 'prkA')));
+  });
+
+  it('menolak payload token tidak valid', async () => {
+    const refB = doc(praktikanB(), 'pushTokens', 'prkB');
+    await assertFails(setDoc(refB, {
+      uid: 'prkB', token: '', platform: 'android', updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(refB, {
+      uid: 'prkB', token: 'ExponentPushToken[x]', platform: 'web', updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(refB, {
+      uid: 'orangLain', token: 'ExponentPushToken[x]', platform: 'ios', updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(refB, {
+      uid: 'prkB', token: 'ExponentPushToken[x]', platform: 'android', updatedAt: ts(1),
+    }));
+  });
+});
+
+describe('sesi dengan labId (Sprint 3)', () => {
+  it('asisten dapat menyimpan labId valid atau null, tetapi string kosong ditolak', async () => {
+    const ref = doc(asisten(), 'sessions', NEW_SESSION);
+    await assertSucceeds(setDoc(ref, {
+      classId: CLASS_ID,
+      judul: 'Modul Lokasi',
+      ruangan: 'Lab Mobile 1',
+      labId: LAB_ID,
+      startsAt: ts(12),
+      endsAt: ts(14),
+      status: 'BELUM_DIBUKA',
+      catatan: '',
+      createdBy: 'ast1',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(ref, { labId: null, updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(ref, { labId: '', updatedAt: serverTimestamp() }));
+  });
+});
+
+describe('presensi berbasis lokasi (Sprint 3)', () => {
+  const locatedAttendance = (overrides = {}) => ({
+    sessionId: LAB_SESSION,
+    classId: CLASS_ID,
+    praktikanUid: 'prkB',
+    attendedAt: serverTimestamp(),
+    labId: LAB_ID,
+    latitude: LAB_LAT + 0.0001,
+    longitude: LAB_LNG,
+    accuracy: 15,
+    distanceMeter: 11,
+    ...overrides,
+  });
+
+  it('praktikan presensi di dalam radius lab berhasil (memverifikasi math.sqrt/math.pow) dan duplikasi ditolak', async () => {
+    const ref = doc(praktikanB(), 'attendances', `${LAB_SESSION}_prkB`);
+    await assertSucceeds(setDoc(ref, locatedAttendance()));
+    await assertFails(setDoc(ref, locatedAttendance()));
+  });
+
+  it('menolak presensi di luar radius meskipun distanceMeter dipalsukan kecil', async () => {
+    await assertFails(setDoc(
+      doc(praktikanB(), 'attendances', `${LAB_SESSION}_prkB`),
+      locatedAttendance({ latitude: LAB_LAT + 0.002, distanceMeter: 10 }),
+    ));
+  });
+
+  it('menolak presensi sesi berlab tanpa koordinat lengkap, labId salah, atau accuracy tidak valid', async () => {
+    const ref = doc(praktikanB(), 'attendances', `${LAB_SESSION}_prkB`);
+    await assertFails(setDoc(ref, {
+      sessionId: LAB_SESSION, classId: CLASS_ID, praktikanUid: 'prkB', attendedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(ref, locatedAttendance({ accuracy: null })));
+    await assertFails(setDoc(ref, locatedAttendance({ accuracy: 101 })));
+    await assertFails(setDoc(ref, locatedAttendance({ labId: 'labLain' })));
+  });
+
+  it('menolak koordinat di luar rentang, distanceMeter negatif, atau melebihi toleransi batas lab', async () => {
+    const ref = doc(praktikanB(), 'attendances', `${LAB_SESSION}_prkB`);
+    await assertFails(setDoc(ref, locatedAttendance({ latitude: 95 })));
+    await assertFails(setDoc(ref, locatedAttendance({ longitude: 185 })));
+    await assertFails(setDoc(ref, locatedAttendance({ distanceMeter: -1 })));
+    await assertFails(setDoc(ref, locatedAttendance({ distanceMeter: LAB_RADIUS * 1.05 + 6 })));
+  });
+
+  it('menolak presensi jika dokumen lab pada sesi sudah tidak ada', async () => {
+    await assertFails(setDoc(
+      doc(praktikanB(), 'attendances', `${MISSING_LAB_SESSION}_prkB`),
+      locatedAttendance({ sessionId: MISSING_LAB_SESSION, labId: 'labTidakAda' }),
+    ));
+  });
+
+  it('sesi lama tanpa labId menolak field lokasi dan tetap lolos tanpa field lokasi', async () => {
+    const ref = doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`);
+    await assertFails(setDoc(ref, locatedAttendance({ sessionId: OPEN_SESSION })));
+    await assertSucceeds(setDoc(ref, {
+      sessionId: OPEN_SESSION, classId: CLASS_ID, praktikanUid: 'prkB', attendedAt: serverTimestamp(),
     }));
   });
 });

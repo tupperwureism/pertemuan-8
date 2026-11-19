@@ -59,6 +59,18 @@ service cloud.firestore {
       return /databases/$(database)/documents/permissions/$(sessionId + '_' + uid);
     }
 
+    function labPath(labId) {
+      return /databases/$(database)/documents/labs/$(labId);
+    }
+
+    function labExists(labId) {
+      return exists(labPath(labId));
+    }
+
+    function labData(labId) {
+      return get(labPath(labId)).data;
+    }
+
     function shortText(value, maxLen) {
       return value is string && value.size() >= 1 && value.size() <= maxLen;
     }
@@ -156,13 +168,14 @@ service cloud.firestore {
 
     function validSessionFields(data) {
       return data.keys().hasOnly(
-               ['classId', 'judul', 'ruangan', 'startsAt', 'endsAt', 'status', 'catatan',
+               ['classId', 'judul', 'ruangan', 'labId', 'startsAt', 'endsAt', 'status', 'catatan',
                 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(
                ['classId', 'judul', 'ruangan', 'startsAt', 'endsAt', 'status', 'catatan',
                 'createdBy', 'createdAt', 'updatedAt'])
         && shortText(data.judul, 150)
         && shortText(data.ruangan, 100)
+        && (!('labId' in data) || data.labId == null || shortText(data.labId, 50))
         && data.catatan is string && data.catatan.size() <= 500
         && data.startsAt is timestamp
         && data.endsAt is timestamp
@@ -195,6 +208,43 @@ service cloud.firestore {
     // ------------------------------------------------------- attendances
     // ID = sessionId_uid. Praktikan create sekali ketika sesi DIBUKA; tidak ada update.
     // Ditolak bila praktikan memiliki izin PENDING/APPROVED pada sesi yang sama.
+    // Bila sesi memiliki labId, wajib menyertakan koordinat + akurasi valid dalam radius lab.
+
+    function hasNoAttendanceLocation(data) {
+      return !('labId' in data)
+        && !('latitude' in data)
+        && !('longitude' in data)
+        && !('accuracy' in data)
+        && !('distanceMeter' in data);
+    }
+
+    function withinLabRadius(data, lab) {
+      return data.distanceMeter >= 0
+        && data.distanceMeter <= lab.radiusMeter * 1.05 + 5
+        && math.sqrt(
+             math.pow((data.latitude - lab.latitude) * 111320, 2)
+             + math.pow((data.longitude - lab.longitude) * 111320 * lab.cosLat, 2)
+           ) <= lab.radiusMeter * 1.05 + 5;
+    }
+
+    function validAttendanceForLab(data, sidLabId) {
+      return labExists(sidLabId)
+        && data.keys().hasAll(['labId', 'latitude', 'longitude', 'accuracy', 'distanceMeter'])
+        && data.labId == sidLabId
+        && data.latitude is number && data.latitude >= -90 && data.latitude <= 90
+        && data.longitude is number && data.longitude >= -180 && data.longitude <= 180
+        && data.accuracy is number && data.accuracy >= 0 && data.accuracy <= 100
+        && data.distanceMeter is number
+        && withinLabRadius(data, labData(sidLabId));
+    }
+
+    function validAttendanceSession(data, sess) {
+      return sess.status == 'DIBUKA'
+        && sess.classId == data.classId
+        && (sess.get('labId', null) == null
+            ? hasNoAttendanceLocation(data)
+            : (sess.labId is string && validAttendanceForLab(data, sess.labId)));
+    }
 
     match /attendances/{attendanceId} {
       allow read: if (signedIn() && resource.data.praktikanUid == request.auth.uid)
@@ -202,7 +252,8 @@ service cloud.firestore {
 
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly(
-             ['sessionId', 'classId', 'praktikanUid', 'attendedAt', 'catatan'])
+             ['sessionId', 'classId', 'praktikanUid', 'attendedAt', 'catatan',
+              'labId', 'latitude', 'longitude', 'accuracy', 'distanceMeter'])
         && request.resource.data.keys().hasAll(
              ['sessionId', 'classId', 'praktikanUid', 'attendedAt'])
         && request.resource.data.praktikanUid == request.auth.uid
@@ -211,8 +262,7 @@ service cloud.firestore {
         && (!('catatan' in request.resource.data)
             || (request.resource.data.catatan is string
                 && request.resource.data.catatan.size() <= 500))
-        && sessionData(request.resource.data.sessionId).status == 'DIBUKA'
-        && sessionData(request.resource.data.sessionId).classId == request.resource.data.classId
+        && validAttendanceSession(request.resource.data, sessionData(request.resource.data.sessionId))
         && isMember(request.resource.data.classId)
         && (!exists(permissionPath(request.resource.data.sessionId, request.auth.uid))
             || get(permissionPath(request.resource.data.sessionId, request.auth.uid)).data.status == 'REJECTED');
@@ -280,6 +330,63 @@ service cloud.firestore {
           && request.resource.data.updatedAt == request.time);
 
       allow delete: if isClassAsisten(resource.data.classId);
+    }
+
+    // -------------------------------------------------------------- labs
+
+    function validLabFields(data) {
+      return data.keys().hasOnly(
+               ['nama', 'gedung', 'deskripsi', 'latitude', 'longitude', 'radiusMeter', 'cosLat',
+                'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasAll(
+               ['nama', 'gedung', 'deskripsi', 'latitude', 'longitude', 'radiusMeter', 'cosLat',
+                'createdBy', 'createdAt', 'updatedAt'])
+        && shortText(data.nama, 100)
+        && shortText(data.gedung, 100)
+        && data.deskripsi is string && data.deskripsi.size() <= 500
+        && data.latitude is number && data.latitude >= -90 && data.latitude <= 90
+        && data.longitude is number && data.longitude >= -180 && data.longitude <= 180
+        && data.radiusMeter is number && data.radiusMeter >= 10 && data.radiusMeter <= 1000
+        && data.cosLat is number && data.cosLat > 0 && data.cosLat <= 1
+        && data.updatedAt == request.time;
+    }
+
+    match /labs/{labId} {
+      allow read: if signedIn();
+
+      allow create: if isAsisten()
+        && validLabFields(request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isAsisten()
+        && validLabFields(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if isAsisten();
+    }
+
+    // -------------------------------------------------------- pushTokens
+    // ID = UID. Dibaca per dokumen oleh pemilik atau asisten (list ditolak agar token tidak bisa di-dump).
+
+    function validPushTokenFields(data, uid) {
+      return data.keys().hasOnly(['uid', 'token', 'platform', 'updatedAt'])
+        && data.keys().hasAll(['uid', 'token', 'platform', 'updatedAt'])
+        && data.uid == uid
+        && shortText(data.token, 200)
+        && data.platform in ['android', 'ios']
+        && data.updatedAt == request.time;
+    }
+
+    match /pushTokens/{uid} {
+      allow get: if isOwner(uid) || isAsisten();
+      allow list: if false;
+
+      allow create, update: if isOwner(uid)
+        && validPushTokenFields(request.resource.data, uid);
+
+      allow delete: if isOwner(uid);
     }
 
     // Deny-by-default untuk path lain.

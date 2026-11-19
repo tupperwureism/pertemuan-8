@@ -38,7 +38,20 @@
       ],
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
-      "expo-build-properties"
+      "expo-build-properties",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Aplikasi memakai lokasi Anda untuk memvalidasi presensi di laboratorium dan menampilkan posisi pada peta."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#2D5BDB",
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -32,11 +32,13 @@ import {
   userRef,
   withId,
 } from './firebase';
+import { notifySessionOpened, notifySessionRescheduled } from './notificationService';
 
 export interface SessionInput {
   classId: string;
   judul: string;
   ruangan: string;
+  labId?: string | null;
   startsAt: Date;
   endsAt: Date;
   catatan?: string;
@@ -174,6 +176,7 @@ export async function createSession(input: SessionInput): Promise<string> {
     classId: input.classId,
     judul: input.judul.trim(),
     ruangan: input.ruangan.trim(),
+    labId: input.labId?.trim() || null,
     startsAt: Timestamp.fromDate(input.startsAt),
     endsAt: Timestamp.fromDate(input.endsAt),
     status: 'BELUM_DIBUKA',
@@ -190,14 +193,60 @@ export async function updateSession(
   sessionId: string,
   input: Omit<SessionInput, 'classId'>,
 ): Promise<void> {
-  await updateDoc(sessionRef(sessionId), {
-    judul: input.judul.trim(),
-    ruangan: input.ruangan.trim(),
-    startsAt: Timestamp.fromDate(input.startsAt),
-    endsAt: Timestamp.fromDate(input.endsAt),
-    catatan: (input.catatan ?? '').trim(),
+  const ref = sessionRef(sessionId);
+  let prev: SessionDoc | null = null;
+  try {
+    prev = withId<SessionDoc>(await getDoc(ref));
+  } catch {
+    // Tetap lanjutkan update meskipun pra-baca gagal; notifikasi dilewati.
+  }
+
+  const cleanJudul = input.judul.trim();
+  const cleanRuangan = input.ruangan.trim();
+  const nextStartsAt = Timestamp.fromDate(input.startsAt);
+  const nextEndsAt = Timestamp.fromDate(input.endsAt);
+  const cleanCatatan = (input.catatan ?? '').trim();
+
+  await updateDoc(ref, {
+    judul: cleanJudul,
+    ruangan: cleanRuangan,
+    ...(input.labId === undefined ? {} : { labId: input.labId?.trim() || null }),
+    startsAt: nextStartsAt,
+    endsAt: nextEndsAt,
+    catatan: cleanCatatan,
     updatedAt: serverTimestamp(),
   });
+
+  if (prev && prev.status !== 'DITUTUP') {
+    const changes: string[] = [];
+    if (
+      prev.startsAt?.toMillis() !== input.startsAt.getTime() ||
+      prev.endsAt?.toMillis() !== input.endsAt.getTime()
+    ) {
+      changes.push('waktu');
+    }
+
+    const prevLabId = prev.labId ?? null;
+    const resolvedLabId = input.labId === undefined ? prevLabId : (input.labId?.trim() || null);
+    if (prev.ruangan !== cleanRuangan || prevLabId !== resolvedLabId) {
+      changes.push('ruangan');
+    }
+
+    if (changes.length > 0) {
+      void notifySessionRescheduled(
+        {
+          ...prev,
+          judul: cleanJudul,
+          ruangan: cleanRuangan,
+          labId: resolvedLabId,
+          startsAt: nextStartsAt,
+          endsAt: nextEndsAt,
+          catatan: cleanCatatan,
+        },
+        changes,
+      );
+    }
+  }
 }
 
 /**
@@ -240,30 +289,44 @@ const NEXT_STATUS: Record<SessionStatus, SessionStatus | null> = {
   DITUTUP: null,
 };
 
-async function transition(sessionId: string, from: SessionStatus, catatan?: string): Promise<void> {
+async function transition(
+  sessionId: string,
+  from: SessionStatus,
+  catatan?: string,
+): Promise<SessionDoc> {
   const to = NEXT_STATUS[from];
   if (!to) throw new Error('Sesi yang sudah ditutup tidak dapat diubah statusnya.');
 
-  await runTransaction(firestore(), async (tx) => {
+  return runTransaction(firestore(), async (tx) => {
     const ref = sessionRef(sessionId);
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error('Sesi tidak ditemukan.');
-    const current = snap.data()?.status as SessionStatus;
-    if (current !== from) {
+    const prevData = snap.data() as Omit<SessionDoc, 'id'>;
+    if (prevData.status !== from) {
       throw new Error('Status sesi sudah berubah. Muat ulang lalu coba lagi.');
     }
+    const nextCatatan = catatan === undefined ? prevData.catatan : catatan.trim();
     tx.update(ref, {
       status: to,
-      ...(catatan === undefined ? {} : { catatan: catatan.trim() }),
+      ...(catatan === undefined ? {} : { catatan: nextCatatan }),
       updatedAt: serverTimestamp(),
     });
+    return {
+      ...prevData,
+      id: snap.id,
+      status: to,
+      catatan: nextCatatan,
+    };
   });
 }
 
-/** BELUM_DIBUKA -> DIBUKA. */
-export const openSession = (sessionId: string, catatan?: string) =>
-  transition(sessionId, 'BELUM_DIBUKA', catatan);
+/** BELUM_DIBUKA -> DIBUKA, lalu mengirim notifikasi push ke praktikan kelas terkait. */
+export async function openSession(sessionId: string, catatan?: string): Promise<void> {
+  const updatedSession = await transition(sessionId, 'BELUM_DIBUKA', catatan);
+  void notifySessionOpened(updatedSession);
+}
 
 /** DIBUKA -> DITUTUP. */
-export const closeSession = (sessionId: string, catatan?: string) =>
-  transition(sessionId, 'DIBUKA', catatan);
+export async function closeSession(sessionId: string, catatan?: string): Promise<void> {
+  await transition(sessionId, 'DIBUKA', catatan);
+}

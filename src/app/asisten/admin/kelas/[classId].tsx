@@ -15,7 +15,13 @@ import {
   PrimaryButton,
   ScreenHeader,
 } from '@/components/screen-kit';
-import { useClassMembers, useSessions, useUserProfiles, useVisibleClasses } from '@/hooks/use-firestore-data';
+import {
+  useClassMembers,
+  useLabs,
+  useSessions,
+  useUserProfiles,
+  useVisibleClasses,
+} from '@/hooks/use-firestore-data';
 import { formatSessionTime, parseDateTime, toDateInput, toTimeInput } from '@/lib/format';
 import { getErrorMessage } from '@/services/authService';
 import { addClassMember, deleteClass, removeClassMember, updateClass } from '@/services/classService';
@@ -32,7 +38,15 @@ type Dialog =
   | { type: 'deleteSession'; session: SessionDoc }
   | null;
 
-const EMPTY_SESSION_FORM = { judul: '', ruangan: '', tanggal: '', mulai: '08:00', selesai: '10:00', catatan: '' };
+const EMPTY_SESSION_FORM = {
+  judul: '',
+  ruangan: '',
+  labId: null as string | null,
+  tanggal: '',
+  mulai: '08:00',
+  selesai: '10:00',
+  catatan: '',
+};
 
 /** Detail kelas: info, peserta (membership), dan sesi. Semua perubahan real-time lewat Firestore. */
 export default function AdminClassDetailScreen() {
@@ -42,6 +56,7 @@ export default function AdminClassDetailScreen() {
   const { data: classes, loading, error, retry } = useVisibleClasses('asisten');
   const { data: members, error: membersError } = useClassMembers(classId);
   const { data: allSessions, loading: sessionsLoading, error: sessionsError, retry: retrySessions } = useSessions();
+  const { data: labs, loading: labsLoading, error: labsError, retry: retryLabs } = useLabs();
   const profiles = useUserProfiles((members ?? []).map((m) => m.uid));
 
   const cls = classes?.find((c) => c.id === classId);
@@ -148,6 +163,7 @@ export default function AdminClassDetailScreen() {
         ? {
             judul: session.judul,
             ruangan: session.ruangan,
+            labId: session.labId ?? null,
             tanggal: toDateInput(session.startsAt),
             mulai: toTimeInput(session.startsAt),
             selesai: toTimeInput(session.endsAt, '10:00'),
@@ -159,8 +175,24 @@ export default function AdminClassDetailScreen() {
   };
 
   const saveSession = (editing: SessionDoc | null) => {
-    if (!sessionForm.judul.trim() || !sessionForm.ruangan.trim()) {
-      setDialogError('Judul dan ruangan wajib diisi.');
+    const availableLabs = labs ?? [];
+    const hasLabs = availableLabs.length > 0;
+    const selectedLab = sessionForm.labId
+      ? availableLabs.find((lab) => lab.id === sessionForm.labId) ?? null
+      : null;
+
+    if (sessionForm.labId && !selectedLab) {
+      setDialogError('Laboratorium yang dipilih tidak ditemukan. Pilih ulang laboratorium.');
+      return;
+    }
+    if (hasLabs && !editing && !selectedLab) {
+      setDialogError('Pilih laboratorium untuk sesi ini.');
+      return;
+    }
+
+    const resolvedRuangan = selectedLab ? selectedLab.nama : sessionForm.ruangan.trim();
+    if (!sessionForm.judul.trim() || !resolvedRuangan) {
+      setDialogError(hasLabs ? 'Judul dan laboratorium wajib diisi.' : 'Judul dan ruangan wajib diisi.');
       return;
     }
     const startsAt = parseDateTime(sessionForm.tanggal, sessionForm.mulai);
@@ -175,7 +207,8 @@ export default function AdminClassDetailScreen() {
     }
     const base = {
       judul: sessionForm.judul,
-      ruangan: sessionForm.ruangan,
+      ruangan: resolvedRuangan,
+      labId: selectedLab ? selectedLab.id : null,
       startsAt,
       endsAt,
       catatan: sessionForm.catatan,
@@ -189,6 +222,15 @@ export default function AdminClassDetailScreen() {
   // -------------------------------------------------------------- render
 
   const sessionDialog = dialog?.type === 'session' ? dialog : null;
+  const availableLabs = labs ?? [];
+  const hasLabs = availableLabs.length > 0;
+  const editingLegacySession = Boolean(sessionDialog?.session && !sessionDialog.session.labId);
+  const missingSavedLab = Boolean(
+    sessionDialog?.session?.labId &&
+      !labsLoading &&
+      !availableLabs.some((lab) => lab.id === sessionForm.labId),
+  );
+  const showManualRuangan = !hasLabs || (editingLegacySession && sessionForm.labId === null);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -319,7 +361,102 @@ export default function AdminClassDetailScreen() {
       >
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetForm}>
           <FormField label="Judul Sesi" maxLength={150} value={sessionForm.judul} onChangeText={(v) => setSessionForm((f) => ({ ...f, judul: v }))} placeholder="Contoh: Modul 1 - React Native Dasar" />
-          <FormField label="Ruangan" maxLength={100} value={sessionForm.ruangan} onChangeText={(v) => setSessionForm((f) => ({ ...f, ruangan: v }))} placeholder="Contoh: Lab Mobile 1" />
+
+          <View style={styles.labFieldGroup}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.labFieldLabel}>Laboratorium</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setDialog(null);
+                  router.push('/asisten/admin/lab' as Href);
+                }}
+                style={styles.linkButton}
+              >
+                <Text style={styles.linkText}>Kelola Lab →</Text>
+              </Pressable>
+            </View>
+
+            {labsError ? (
+              <View style={styles.sessionErrorBox}>
+                <ErrorBanner message={getErrorMessage(labsError)} />
+                <Pressable accessibilityRole="button" onPress={retryLabs} style={styles.linkButton}>
+                  <Text style={styles.linkText}>Muat ulang daftar laboratorium</Text>
+                </Pressable>
+              </View>
+            ) : labsLoading ? (
+              <Text style={styles.muted}>Memuat daftar laboratorium…</Text>
+            ) : hasLabs ? (
+              <View style={styles.labChipsWrap}>
+                {availableLabs.map((lab) => {
+                  const selected = sessionForm.labId === lab.id;
+                  return (
+                    <Pressable
+                      key={lab.id}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      onPress={() =>
+                        setSessionForm((f) => ({
+                          ...f,
+                          labId: lab.id,
+                          ruangan: lab.nama,
+                        }))
+                      }
+                      style={[styles.labChip, selected && styles.labChipSelected]}
+                    >
+                      <Text style={[styles.labChipText, selected && styles.labChipTextSelected]}>
+                        {lab.nama} ({lab.radiusMeter} m)
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                {editingLegacySession ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: sessionForm.labId === null }}
+                    onPress={() => setSessionForm((f) => ({ ...f, labId: null }))}
+                    style={[styles.labChip, sessionForm.labId === null && styles.labChipSelected]}
+                  >
+                    <Text
+                      style={[
+                        styles.labChipText,
+                        sessionForm.labId === null && styles.labChipTextSelected,
+                      ]}
+                    >
+                      Tanpa Lab (Sesi Lama)
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : (
+              <View style={styles.emptyLabNotice}>
+                <Text style={styles.emptyLabNoticeText}>
+                  Tambahkan laboratorium dulu agar presensi dapat memvalidasi lokasi praktikan.
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setDialog(null);
+                    router.push('/asisten/admin/lab' as Href);
+                  }}
+                  style={styles.linkButton}
+                >
+                  <Text style={styles.linkText}>Buka Kelola Laboratorium →</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {missingSavedLab ? (
+              <Text style={styles.labWarningText}>
+                Laboratorium sesi ini sebelumnya sudah dihapus. Pilih ulang laboratorium di atas.
+              </Text>
+            ) : null}
+          </View>
+
+          {showManualRuangan ? (
+            <FormField label="Ruangan" maxLength={100} value={sessionForm.ruangan} onChangeText={(v) => setSessionForm((f) => ({ ...f, ruangan: v }))} placeholder="Contoh: Lab Mobile 1" />
+          ) : null}
+
           <FormField label="Tanggal (YYYY-MM-DD)" value={sessionForm.tanggal} onChangeText={(v) => setSessionForm((f) => ({ ...f, tanggal: v }))} placeholder="2026-11-12" autoCapitalize="none" keyboardType="numbers-and-punctuation" />
           <View style={styles.row}>
             <View style={styles.flex1}>
@@ -415,4 +552,32 @@ const styles = StyleSheet.create({
   dangerLink: { paddingVertical: 4, paddingHorizontal: 6 },
   dangerLinkText: { fontSize: 13, fontWeight: '700', color: colors.danger },
   sheetForm: { gap: 14, paddingBottom: 8 },
+  labFieldGroup: { gap: 8 },
+  labFieldLabel: { fontSize: 13, fontWeight: '600', color: colors.label },
+  labChipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  labChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.bg,
+  },
+  labChipSelected: {
+    borderColor: colors.asisten,
+    backgroundColor: '#EDE9FE',
+  },
+  labChipText: { fontSize: 13, fontWeight: '600', color: colors.label },
+  labChipTextSelected: { color: '#6D28D9', fontWeight: '700' },
+  emptyLabNotice: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    borderRadius: 10,
+    padding: 12,
+    gap: 4,
+    alignItems: 'flex-start',
+  },
+  emptyLabNoticeText: { fontSize: 12, color: colors.label, lineHeight: 18 },
+  labWarningText: { fontSize: 12, fontWeight: '600', color: colors.dangerText },
 });

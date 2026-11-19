@@ -29,6 +29,7 @@ import {
   type SentimentLabel,
 } from './aiService';
 import { firestore, requireUid, subscribePerClassQuery, toError, withId } from './firebase';
+import { notifyPermissionDecided } from './notificationService';
 
 export interface PermissionAiRawMeta {
   status?: SentimentAnalysisResult['status'];
@@ -284,12 +285,32 @@ export async function reviewPermission(
   decision: Extract<PermissionStatus, 'APPROVED' | 'REJECTED'>,
 ): Promise<void> {
   const asistenUid = requireUid();
-  await updateDoc(permissionRef(id), {
+  const ref = permissionRef(id);
+
+  let prev: PermissionDoc | null = null;
+  try {
+    prev = withId<PermissionDoc>(await getDoc(ref));
+  } catch {
+    // Tetap lanjutkan update keputusan asisten meskipun pra-baca gagal.
+  }
+
+  await updateDoc(ref, {
     status: decision,
     reviewedBy: asistenUid,
     reviewedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+
+  if (prev) {
+    void notifyPermissionDecided(
+      {
+        ...prev,
+        status: decision,
+        reviewedBy: asistenUid,
+      },
+      decision,
+    );
+  }
 }
 
 /**

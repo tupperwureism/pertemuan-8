@@ -28,6 +28,8 @@ export const COLLECTIONS = {
   sessions: 'sessions',
   attendances: 'attendances',
   permissions: 'permissions',
+  labs: 'labs',
+  pushTokens: 'pushTokens',
 } as const;
 
 /** users/{uid} - ID dokumen = UID Firebase Auth. */
@@ -68,6 +70,7 @@ export interface SessionDoc {
   classId: string;
   judul: string;
   ruangan: string;
+  labId?: string | null;
   startsAt: FirestoreTimestamp;
   endsAt: FirestoreTimestamp;
   status: SessionStatus;
@@ -85,6 +88,11 @@ export interface AttendanceDoc {
   praktikanUid: string;
   attendedAt: ServerTimestamp;
   catatan?: string;
+  labId?: string;
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number;
+  distanceMeter?: number;
 }
 
 /** permissions/{sessionId_uid} - ID deterministik. */
@@ -101,6 +109,30 @@ export interface PermissionDoc {
   reviewedBy: string | null;
   reviewedAt: ServerTimestamp;
   createdAt: ServerTimestamp;
+  updatedAt: ServerTimestamp;
+}
+
+/** labs/{labId} - auto ID. Dibaca semua user login; ditulis asisten. */
+export interface LabDoc {
+  id: string;
+  nama: string;
+  gedung: string;
+  deskripsi: string;
+  latitude: number;
+  longitude: number;
+  radiusMeter: number;
+  cosLat: number;
+  createdBy: string;
+  createdAt: ServerTimestamp;
+  updatedAt: ServerTimestamp;
+}
+
+/** pushTokens/{uid} - ID = UID. Token Expo push milik perangkat terakhir user itu. */
+export interface PushTokenDoc {
+  id: string;
+  uid: string;
+  token: string;
+  platform: 'android' | 'ios';
   updatedAt: ServerTimestamp;
 }
 

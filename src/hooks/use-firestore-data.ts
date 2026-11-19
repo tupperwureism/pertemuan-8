@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { subscribeClassMembers, subscribeVisibleClasses } from '@/services/classService';
+import { subscribeLabs } from '@/services/labService';
 import { subscribeAttendances, subscribeSession, subscribeSessions } from '@/services/sessionService';
 import { fetchUsersByIds } from '@/services/userService';
 import type { UserDoc, UserRole } from '@/types/firebase';
@@ -10,6 +11,11 @@ import { useSubscription } from './use-subscription';
 /** Jadwal sesi milik pengguna login (asisten: semua; praktikan: kelas yang diikuti). */
 export function useSessions() {
   return useSubscription(subscribeSessions);
+}
+
+/** Daftar seluruh laboratorium (diurutkan berdasarkan nama). */
+export function useLabs() {
+  return useSubscription(subscribeLabs);
 }
 
 export function useSession(sessionId: string | undefined) {

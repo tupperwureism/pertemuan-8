@@ -18,6 +18,7 @@ import {
 import { useLabs } from '@/hooks/use-firestore-data';
 import { getErrorMessage } from '@/services/authService';
 import { createLab, deleteLab, updateLab } from '@/services/labService';
+import { getCurrentFix, LocationError, openAppSettings } from '@/services/locationService';
 import type { LabDoc } from '@/types/firebase';
 
 type Dialog =
@@ -47,6 +48,8 @@ export default function AdminLabsScreen() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [dialogError, setDialogError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [locationBlocked, setLocationBlocked] = useState(false);
 
   const goBack = () =>
     router.canGoBack() ? router.back() : router.replace('/asisten/admin' as Href);
@@ -65,12 +68,37 @@ export default function AdminLabsScreen() {
         : EMPTY_FORM,
     );
     setDialogError('');
+    setLocating(false);
+    setLocationBlocked(false);
     setDialog({ type: 'form', lab });
   };
 
   const openDelete = (lab: LabDoc) => {
     setDialogError('');
     setDialog({ type: 'delete', lab });
+  };
+
+  const handleUseMyLocation = async () => {
+    setLocating(true);
+    setDialogError('');
+    setLocationBlocked(false);
+    try {
+      const fix = await getCurrentFix();
+      setForm((f) => ({
+        ...f,
+        latitude: fix.latitude.toFixed(6),
+        longitude: fix.longitude.toFixed(6),
+      }));
+    } catch (e) {
+      if (e instanceof LocationError) {
+        setDialogError(e.message);
+        setLocationBlocked(e.reason === 'PERMISSION_BLOCKED');
+      } else {
+        setDialogError(getErrorMessage(e));
+      }
+    } finally {
+      setLocating(false);
+    }
   };
 
   const handleSave = async () => {
@@ -239,10 +267,21 @@ export default function AdminLabsScreen() {
             multiline
           />
 
-          {/* ponytail: sambungkan tombol "Ambil lokasi saya" via getCurrentFix() setelah P2 merge SRS-17 */}
-          <Text style={styles.helperNote}>
-            Masukkan koordinat titik pusat laboratorium secara manual (dapat disalin dari Google Maps).
-          </Text>
+          <View style={styles.locationHeader}>
+            <View style={styles.locationCopy}>
+              <Text style={styles.locationLabel}>Koordinat Titik Pusat Lab</Text>
+              <Text style={styles.helperNote}>
+                Ambil koordinat GPS perangkat saat ini atau isi manual.
+              </Text>
+            </View>
+            <PrimaryButton
+              label="Ambil lokasi saya"
+              tone="neutral"
+              onPress={() => void handleUseMyLocation()}
+              loading={locating}
+              disabled={saving}
+            />
+          </View>
 
           <View style={styles.row}>
             <View style={styles.flex1}>
@@ -275,12 +314,26 @@ export default function AdminLabsScreen() {
             keyboardType="numeric"
           />
 
-          {dialogError && formDialog ? <ErrorBanner message={dialogError} /> : null}
+          {dialogError && formDialog ? (
+            <View style={styles.errorStack}>
+              <ErrorBanner message={dialogError} />
+              {locationBlocked ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void openAppSettings()}
+                  style={styles.linkButton}
+                >
+                  <Text style={styles.linkText}>Buka pengaturan aplikasi →</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
           <PrimaryButton
             label={formDialog?.lab ? 'Simpan Perubahan' : 'Simpan Laboratorium'}
             tone="asisten"
             onPress={() => void handleSave()}
             loading={saving}
+            disabled={locating}
           />
         </ScrollView>
       </FormSheet>
@@ -338,7 +391,11 @@ const styles = StyleSheet.create({
   },
   addButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   sheetForm: { gap: 14, paddingBottom: 8 },
+  locationHeader: { gap: 8 },
+  locationCopy: { gap: 2 },
+  locationLabel: { fontSize: 13, fontWeight: '600', color: colors.label },
   helperNote: { fontSize: 12, color: colors.textMuted, lineHeight: 18 },
+  errorStack: { gap: 6, alignItems: 'flex-start' },
   row: { flexDirection: 'row', gap: 12 },
   flex1: { flex: 1 },
 });

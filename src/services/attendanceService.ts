@@ -10,12 +10,14 @@ import {
   where,
 } from '@react-native-firebase/firestore';
 
+import { distanceMeters, isWithinRadius, MAX_ACCURACY_METER } from '@/lib/geo';
 import {
   attendanceId,
   COLLECTIONS,
   type AttendanceDoc,
   type ClassDoc,
   type ErrorCallback,
+  type LabDoc,
   type PermissionStatus,
   type SessionDoc,
   type Unsubscribe,
@@ -26,9 +28,17 @@ import { subscribeAttendances } from './sessionService';
 
 export { subscribeAttendances };
 
+/** Lokasi perangkat yang dikirim saat presensi pada sesi yang terikat ke laboratorium. */
+export interface AttendanceLocation {
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+}
+
 const attendancesCol = () => collection(firestore(), COLLECTIONS.attendances);
 const attendanceRef = (id: string) => doc(firestore(), COLLECTIONS.attendances, id);
 const sessionRef = (sessionId: string) => doc(firestore(), COLLECTIONS.sessions, sessionId);
+const labRef = (labId: string) => doc(firestore(), COLLECTIONS.labs, labId);
 const classRef = (classId: string) => doc(firestore(), COLLECTIONS.classes, classId);
 
 function toAttendance(snap: { id: string; data(): unknown }): AttendanceDoc {
@@ -46,11 +56,14 @@ function sortByAttendedDesc(items: AttendanceDoc[]): AttendanceDoc[] {
  * Mencatat kehadiran praktikan satu kali ketika sesi berstatus DIBUKA.
  * Memakai UID dari Firebase Auth (requireUid), ID deterministik `{sessionId}_{uid}`,
  * serverTimestamp(), dan transaksi Firestore anti-dobel.
+ * Bila sesi memiliki `labId`, wajib menyertakan `location` valid dengan akurasi <= MAX_ACCURACY_METER
+ * serta jarak berada dalam radius laboratorium.
  */
 export async function recordAttendance(
   sessionId: string,
   uid?: string,
   note?: string,
+  location?: AttendanceLocation,
 ): Promise<void> {
   const authUid = requireUid();
   if (uid && uid !== authUid) {
@@ -121,6 +134,64 @@ export async function recordAttendance(
       attendedAt: serverTimestamp(),
       ...(trimmedNote ? { catatan: trimmedNote } : {}),
     };
+
+    const sessionLabId =
+      typeof sessData.labId === 'string' && sessData.labId.trim().length > 0
+        ? sessData.labId
+        : null;
+
+    if (sessionLabId) {
+      if (
+        !location ||
+        !Number.isFinite(location.latitude) ||
+        !Number.isFinite(location.longitude)
+      ) {
+        throw new Error('Lokasi belum tersedia.');
+      }
+      if (
+        location.latitude < -90 ||
+        location.latitude > 90 ||
+        location.longitude < -180 ||
+        location.longitude > 180
+      ) {
+        throw new Error('Koordinat lokasi tidak valid.');
+      }
+      if (
+        location.accuracy === null ||
+        !Number.isFinite(location.accuracy) ||
+        location.accuracy < 0
+      ) {
+        throw new Error('Akurasi GPS tidak diketahui, coba lagi.');
+      }
+      if (location.accuracy > MAX_ACCURACY_METER) {
+        throw new Error(
+          `Akurasi GPS rendah (±${Math.round(location.accuracy)} m, maksimal ${MAX_ACCURACY_METER} m). Pindah ke area terbuka lalu coba lagi.`,
+        );
+      }
+
+      const labSnap = await tx.get(labRef(sessionLabId));
+      if (!labSnap.exists()) {
+        throw new Error('Data laboratorium untuk sesi ini tidak ditemukan. Hubungi asisten.');
+      }
+      const labData = labSnap.data() as Omit<LabDoc, 'id'>;
+      const rawDistance = distanceMeters(
+        { latitude: location.latitude, longitude: location.longitude },
+        { latitude: labData.latitude, longitude: labData.longitude },
+      );
+      const roundedDistance = Math.round(rawDistance);
+
+      if (!isWithinRadius(rawDistance, labData.radiusMeter)) {
+        throw new Error(
+          `Anda berada ${roundedDistance} m dari lab, radius ${labData.radiusMeter} m.`,
+        );
+      }
+
+      payload.labId = sessionLabId;
+      payload.latitude = location.latitude;
+      payload.longitude = location.longitude;
+      payload.accuracy = location.accuracy;
+      payload.distanceMeter = roundedDistance;
+    }
 
     tx.set(targetRef, payload);
   });

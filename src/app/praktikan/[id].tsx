@@ -1,16 +1,13 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,7 +16,6 @@ import SentimentResultCard from '@/components/SentimentResultCard';
 import { useAuth } from '@/context/AuthContext';
 import { DUMMY_SESSIONS } from '@/data/dummyData';
 import {
-  recordAttendance,
   subscribeClassById,
   subscribeMySessionAttendance,
 } from '@/services/attendanceService';
@@ -116,9 +112,6 @@ function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
 
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState<boolean>(false);
-  const [catatan, setCatatan] = useState<string>('');
-  const [feedbackVisible, setFeedbackVisible] = useState<boolean>(false);
 
   const canSubscribe = Boolean(sessionId && uid);
 
@@ -215,36 +208,16 @@ function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
 
   const isSessionOpen = effectiveStatus === 'DIBUKA';
   const hasBlockingPermission = Boolean(permission && permission.status !== 'REJECTED');
-  const canAttend = Boolean(
-    uid && session && isSessionOpen && !attendance && !hasBlockingPermission && !submitting,
+  const hasLabValidation = Boolean(
+    typeof session?.labId === 'string' && session.labId.trim().length > 0,
   );
 
-  const handleSubmitAttendance = async () => {
-    if (!uid) {
-      Alert.alert(
-        'Perlu Login Firebase',
-        'Silakan masuk menggunakan akun praktikan terlebih dahulu untuk mencatat presensi ke Firestore.',
-      );
-      return;
-    }
-    if (!canAttend) return;
-
-    setSubmitting(true);
-    setErrorMessage(null);
-    try {
-      await recordAttendance(sessionId, uid, catatan.trim() || undefined);
-      setFeedbackVisible(true);
-    } catch (err) {
-      const msg = getErrorMessage(err);
-      setErrorMessage(msg);
-      Alert.alert('Gagal Presensi', msg);
-    } finally {
-      setSubmitting(false);
-    }
+  const openAttendancePage = () => {
+    if (!sessionId) return;
+    router.push(`/praktikan/presensi/${sessionId}` as Href);
   };
 
   const openHistory = () => {
-    setFeedbackVisible(false);
     router.push('/praktikan/riwayat');
   };
 
@@ -379,6 +352,11 @@ function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
                 <Text style={styles.successText}>
                   Kehadiran {studentName} tercatat pada {formatTimestamp(attendance.attendedAt)}.
                 </Text>
+                {typeof attendance.distanceMeter === 'number' ? (
+                  <Text style={styles.successMeta}>
+                    Jarak tercatat: {attendance.distanceMeter} m dari titik laboratorium.
+                  </Text>
+                ) : null}
                 {attendance.catatan ? (
                   <Text style={styles.successNote}>“{attendance.catatan}”</Text>
                 ) : null}
@@ -386,26 +364,16 @@ function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
             </View>
           ) : (
             <View style={styles.formCard}>
-              <Text style={styles.inputLabel}>Catatan kehadiran (opsional)</Text>
-              <TextInput
-                accessibilityLabel="Catatan kehadiran"
-                editable={isSessionOpen && !hasBlockingPermission && !submitting}
-                maxLength={120}
-                multiline
-                onChangeText={setCatatan}
-                placeholder={
-                  hasBlockingPermission
-                    ? 'Presensi dinonaktifkan karena sudah mengajukan izin'
-                    : isSessionOpen
-                      ? 'Contoh: Hadir tepat waktu'
-                      : 'Form tersedia saat sesi dibuka'
-                }
-                placeholderTextColor="#98A2B3"
-                style={[styles.input, (!isSessionOpen || hasBlockingPermission) && styles.inputDisabled]}
-                textAlignVertical="top"
-                value={catatan}
-              />
-              <Text style={styles.characterCount}>{catatan.length}/120</Text>
+              <Text style={styles.attendanceSummaryTitle}>
+                {hasLabValidation
+                  ? 'Presensi memerlukan verifikasi lokasi laboratorium'
+                  : 'Lanjutkan presensi di halaman presensi'}
+              </Text>
+              <Text style={styles.attendanceSummaryText}>
+                {hasLabValidation
+                  ? 'Buka halaman presensi untuk memeriksa posisi GPS Anda terhadap radius laboratorium dan mencatat kehadiran.'
+                  : 'Buka halaman presensi untuk melihat status sesi real-time dan mencatat kehadiran Anda.'}
+              </Text>
 
               {hasBlockingPermission ? (
                 <View style={styles.disabledNotice}>
@@ -419,35 +387,24 @@ function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
                 <View style={styles.disabledNotice}>
                   <Text style={styles.disabledNoticeText}>
                     {effectiveStatus === 'BELUM_DIBUKA'
-                      ? 'Presensi belum tersedia karena sesi belum dibuka oleh asisten.'
-                      : 'Presensi tidak tersedia karena sesi sudah ditutup.'}
+                      ? 'Sesi belum dibuka oleh asisten. Anda tetap dapat membuka halaman presensi untuk mengecek kesiapan lokasi.'
+                      : 'Sesi praktikum sudah ditutup.'}
                   </Text>
                 </View>
               ) : null}
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={openAttendancePage}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.openAttendanceButton,
+                  pressed && styles.primaryButtonPressed,
+                ]}>
+                <Text style={styles.primaryButtonText}>Buka halaman presensi</Text>
+              </Pressable>
             </View>
           )}
-
-          <Pressable
-            accessibilityRole="button"
-            disabled={!canAttend}
-            onPress={handleSubmitAttendance}
-            style={({ pressed }) => [
-              styles.primaryButton,
-              !canAttend && styles.primaryButtonDisabled,
-              pressed && canAttend && styles.primaryButtonPressed,
-            ]}>
-            {submitting ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text
-                style={[
-                  styles.primaryButtonText,
-                  !canAttend && styles.primaryButtonTextDisabled,
-                ]}>
-                {attendance ? 'Presensi sudah tercatat' : 'Hadir sekarang'}
-              </Text>
-            )}
-          </Pressable>
 
           {/* Bagian Pengajuan Izin (SRS-11 & SRS-12) */}
           <View style={styles.sectionHeader}>
@@ -523,40 +480,6 @@ function PraktikanSessionDetailContent({ sessionId }: { sessionId: string }) {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      <Modal
-        animationType="fade"
-        onRequestClose={() => setFeedbackVisible(false)}
-        transparent
-        visible={feedbackVisible}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalIcon}>
-              <Text style={styles.modalIconText}>✓</Text>
-            </View>
-            <Text style={styles.modalTitle}>Presensi berhasil</Text>
-            <Text style={styles.modalText}>
-              Kehadiranmu sudah tercatat di Firestore dan tidak dapat dikirim ulang untuk sesi ini.
-            </Text>
-            <View style={styles.modalTimeCard}>
-              <Text style={styles.modalTimeLabel}>Waktu kehadiran</Text>
-              <Text style={styles.modalTime}>{formatTimestamp(attendance?.attendedAt)}</Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setFeedbackVisible(false)}
-              style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
-              <Text style={styles.primaryButtonText}>Kembali ke detail</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={openHistory}
-              style={({ pressed }) => [styles.modalLinkButton, pressed && styles.pressed]}>
-              <Text style={styles.modalLinkText}>Buka riwayat kehadiran</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -713,26 +636,15 @@ const styles = StyleSheet.create({
     borderColor: '#E4E7EC',
     borderRadius: 20,
     borderWidth: 1,
+    gap: 10,
     padding: 17,
   },
-  inputLabel: { color: '#344054', fontSize: 13, fontWeight: '800', marginBottom: 8 },
-  input: {
-    backgroundColor: '#F9FAFB',
-    borderColor: '#D0D5DD',
-    borderRadius: 14,
-    borderWidth: 1,
-    color: '#101828',
-    fontSize: 15,
-    minHeight: 96,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  inputDisabled: { backgroundColor: '#F2F4F7', color: '#98A2B3' },
-  characterCount: { color: '#98A2B3', fontSize: 11, marginTop: 7, textAlign: 'right' },
+  attendanceSummaryTitle: { color: '#101828', fontSize: 15, fontWeight: '800' },
+  attendanceSummaryText: { color: '#475467', fontSize: 13, lineHeight: 20 },
+  openAttendanceButton: { marginTop: 4 },
   disabledNotice: {
     backgroundColor: '#FFF7E8',
     borderRadius: 12,
-    marginTop: 12,
     padding: 12,
   },
   disabledNoticeText: { color: '#7A4D00', fontSize: 13, lineHeight: 19 },
@@ -758,6 +670,7 @@ const styles = StyleSheet.create({
   successCopy: { flex: 1 },
   successTitle: { color: '#05603A', fontSize: 16, fontWeight: '800' },
   successText: { color: '#276749', fontSize: 13, lineHeight: 20, marginTop: 4 },
+  successMeta: { color: '#166534', fontSize: 12, fontWeight: '700', marginTop: 4 },
   successNote: { color: '#344054', fontSize: 13, fontStyle: 'italic', marginTop: 8 },
   primaryButton: {
     alignItems: 'center',
@@ -767,10 +680,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     paddingHorizontal: 18,
   },
-  primaryButtonDisabled: { backgroundColor: '#E4E7EC' },
   primaryButtonPressed: { backgroundColor: '#2048B5', transform: [{ scale: 0.99 }] },
   primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
-  primaryButtonTextDisabled: { color: '#98A2B3' },
   permissionPromptCard: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E4E7EC',
@@ -826,54 +737,4 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: '#244AA5', fontSize: 13, fontWeight: '800', textAlign: 'center' },
   pressed: { opacity: 0.72 },
-  modalBackdrop: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(8, 15, 35, 0.6)',
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    maxWidth: 420,
-    padding: 24,
-    width: '100%',
-  },
-  modalIcon: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    backgroundColor: '#DDF8E8',
-    borderRadius: 28,
-    height: 56,
-    justifyContent: 'center',
-    width: 56,
-  },
-  modalIconText: { color: '#0E8C52', fontSize: 28, fontWeight: '900' },
-  modalTitle: {
-    color: '#101828',
-    fontSize: 23,
-    fontWeight: '900',
-    marginTop: 16,
-    textAlign: 'center',
-  },
-  modalText: {
-    color: '#667085',
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  modalTimeCard: {
-    alignItems: 'center',
-    backgroundColor: '#F2F4F7',
-    borderRadius: 14,
-    marginBottom: 18,
-    marginTop: 18,
-    padding: 14,
-  },
-  modalTimeLabel: { color: '#667085', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-  modalTime: { color: '#17233C', fontSize: 18, fontWeight: '900', marginTop: 3 },
-  modalLinkButton: { alignItems: 'center', paddingTop: 16 },
-  modalLinkText: { color: '#2D5BDB', fontSize: 14, fontWeight: '800' },
 });

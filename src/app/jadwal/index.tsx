@@ -3,11 +3,14 @@ import React, { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { NotificationStatusBanner } from '@/components/notification-status-banner';
 import { ConfirmSheet, EmptyState, ErrorState, LoadingState } from '@/components/screen-kit';
 import { useAuth } from '@/context/AuthContext';
 import { useSessions, useVisibleClasses } from '@/hooks/use-firestore-data';
+import { usePushRegistration } from '@/hooks/use-push-registration';
 import { formatSessionTime } from '@/lib/format';
 import { getErrorMessage } from '@/services/authService';
+import { removePushToken } from '@/services/pushTokenService';
 import type { SessionDoc, SessionStatus } from '@/types/firebase';
 
 type FilterType = 'SEMUA' | SessionStatus;
@@ -26,6 +29,7 @@ export default function JadwalPraktikumScreen() {
 
   const { data: sessions, loading, error, retry } = useSessions();
   const { data: classes } = useVisibleClasses(role);
+  const pushRegistration = usePushRegistration();
 
   const [selectedFilter, setSelectedFilter] = useState<FilterType>('SEMUA');
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -56,6 +60,7 @@ export default function JadwalPraktikumScreen() {
   const handleLogout = async () => {
     setLoggingOut(true);
     try {
+      await removePushToken();
       await signOut();
     } finally {
       // Setelah signOut, Stack.Protected memindahkan pengguna ke /login.
@@ -254,6 +259,25 @@ export default function JadwalPraktikumScreen() {
         )}
       </View>
 
+      <View style={styles.quickActions}>
+        <Pressable
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.mapButton, pressed && styles.mapButtonPressed]}
+          onPress={() => router.push('/peta' as Href)}
+        >
+          <View style={styles.mapButtonIcon}>
+            <Text style={styles.mapButtonIconText}>P</Text>
+          </View>
+          <View style={styles.mapButtonCopy}>
+            <Text style={styles.mapButtonTitle}>Peta Laboratorium</Text>
+            <Text style={styles.mapButtonSubtitle}>Lihat lokasi, radius, dan aktivitas lab</Text>
+          </View>
+          <Text style={styles.mapButtonArrow}>›</Text>
+        </Pressable>
+      </View>
+
+      <NotificationStatusBanner {...pushRegistration} />
+
       <View style={styles.filterSection}>
         <Text style={styles.filterSectionLabel}>FILTER STATUS SESI:</Text>
         <View style={styles.filterChipsRow}>
@@ -409,6 +433,36 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#6D28D9',
   },
+  quickActions: {
+    marginHorizontal: 16,
+    marginTop: 10,
+  },
+  mapButton: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  mapButtonPressed: { opacity: 0.88 },
+  mapButtonIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563EB',
+  },
+  mapButtonIconText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' },
+  mapButtonCopy: { flex: 1, gap: 2 },
+  mapButtonTitle: { color: '#1E3A8A', fontSize: 13, fontWeight: '800' },
+  mapButtonSubtitle: { color: '#1D4ED8', fontSize: 11 },
+  mapButtonArrow: { color: '#2563EB', fontSize: 26, fontWeight: '500' },
   filterSection: {
     paddingHorizontal: 16,
     marginTop: 12,

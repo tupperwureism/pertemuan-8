@@ -15,6 +15,12 @@ const EXPO_PUSH_BATCH_SIZE = 100;
 
 type PushNotificationType = 'SESSION_OPENED' | 'SESSION_RESCHEDULED' | 'PERMISSION_DECIDED';
 
+const PUSH_TTL_SECONDS: Record<PushNotificationType, number> = {
+  SESSION_OPENED: 7200,
+  SESSION_RESCHEDULED: 86400,
+  PERMISSION_DECIDED: 86400,
+};
+
 interface PushPayloadData {
   type: PushNotificationType;
   sessionId: string;
@@ -80,6 +86,7 @@ async function sendPush(
 
     for (let i = 0; i < tokens.length; i += EXPO_PUSH_BATCH_SIZE) {
       const batch = tokens.slice(i, i + EXPO_PUSH_BATCH_SIZE);
+      const ttl = PUSH_TTL_SECONDS[payload.data.type];
       const messages = batch.map((to) => ({
         to,
         title: payload.title,
@@ -87,6 +94,8 @@ async function sendPush(
         data: payload.data,
         sound: 'default',
         channelId: 'default',
+        priority: 'high' as const,
+        ttl,
       }));
 
       const res = await fetch(EXPO_PUSH_URL, {
@@ -107,9 +116,17 @@ async function sendPush(
       const json = (await res.json().catch(() => null)) as ExpoPushResponse | null;
       const tickets = Array.isArray(json?.data) ? json.data : [];
       tickets.forEach((ticket, idx) => {
+        const targetToken = batch[idx] ?? idx;
+        if (ticket.details?.error === 'DeviceNotRegistered') {
+          console.warn(
+            `[notificationService] Token perangkat tidak terdaftar (DeviceNotRegistered) (${targetToken}):`,
+            ticket.message ?? 'perangkat tidak lagi terdaftar di FCM/APNs',
+          );
+          return;
+        }
         if (ticket.status === 'error') {
           console.warn(
-            `[notificationService] Push ticket gagal (${batch[idx] ?? idx}):`,
+            `[notificationService] Push ticket gagal (${targetToken}):`,
             ticket.message ?? ticket.details?.error ?? 'unknown error',
           );
         }

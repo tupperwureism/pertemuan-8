@@ -36,7 +36,11 @@ function routeFromNotification(notification: Notifications.Notification): void {
   const type = typeof data.type === 'string' ? data.type : '';
   const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
 
-  if ((type === 'SESSION_OPENED' || type === 'SESSION_RESCHEDULED') && sessionId) {
+  if (type === 'SESSION_OPENED' && sessionId) {
+    router.push(`/praktikan/presensi/${sessionId}` as Href);
+    return;
+  }
+  if (type === 'SESSION_RESCHEDULED' && sessionId) {
     router.push(`/praktikan/${sessionId}` as Href);
     return;
   }

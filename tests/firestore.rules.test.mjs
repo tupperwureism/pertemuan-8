@@ -41,6 +41,7 @@ let env;
 
 const asisten = () => env.authenticatedContext('ast1', { email: 'ast@x.id' }).firestore();
 const asistenLain = () => env.authenticatedContext('ast2', { email: 'ast2@x.id' }).firestore();
+const aslab = () => env.authenticatedContext('lab1', { email: 'lab@x.id' }).firestore();
 const praktikanA = () => env.authenticatedContext('prkA', { email: 'a@x.id' }).firestore();
 const praktikanB = () => env.authenticatedContext('prkB', { email: 'b@x.id' }).firestore();
 const outsider = () => env.authenticatedContext('prkC', { email: 'c@x.id' }).firestore();
@@ -76,6 +77,7 @@ beforeEach(async () => {
       });
     await profile('ast1', 'asisten', 'ast@x.id');
     await profile('ast2', 'asisten', 'ast2@x.id');
+    await profile('lab1', 'aslab', 'lab@x.id');
     await profile('prkA', 'praktikan', 'a@x.id');
     await profile('prkB', 'praktikan', 'b@x.id');
     await profile('prkC', 'praktikan', 'c@x.id');
@@ -372,11 +374,20 @@ describe('labs (Sprint 3)', () => {
     await assertFails(getDocs(collection(anon(), 'labs')));
   });
 
-  it('asisten dapat membuat, mengubah, dan menghapus lab dengan data valid', async () => {
-    const ref = doc(asisten(), 'labs', 'labBaru');
-    await assertSucceeds(setDoc(ref, validLab('ast1')));
+  it('aslab dapat membuat, mengubah, dan menghapus lab dengan data valid', async () => {
+    const ref = doc(aslab(), 'labs', 'labBaru');
+    await assertSucceeds(setDoc(ref, validLab('lab1')));
     await assertSucceeds(updateDoc(ref, { radiusMeter: 200, updatedAt: serverTimestamp() }));
     await assertSucceeds(deleteDoc(ref));
+  });
+
+  it('asisten tidak dapat menulis atau menghapus lab', async () => {
+    await assertFails(setDoc(doc(asisten(), 'labs', 'labAsisten'), validLab('ast1')));
+    await assertFails(updateDoc(doc(asisten(), 'labs', LAB_ID), {
+      radiusMeter: 50,
+      updatedAt: serverTimestamp(),
+    }));
+    await assertFails(deleteDoc(doc(asisten(), 'labs', LAB_ID)));
   });
 
   it('praktikan tidak dapat menulis atau menghapus lab', async () => {
@@ -386,13 +397,134 @@ describe('labs (Sprint 3)', () => {
   });
 
   it('menolak lab dengan radius, koordinat, cosLat, atau metadata tidak valid', async () => {
-    await assertFails(setDoc(doc(asisten(), 'labs', 'labKecil'), { ...validLab(), radiusMeter: 5 }));
-    await assertFails(setDoc(doc(asisten(), 'labs', 'labBesar'), { ...validLab(), radiusMeter: 1500 }));
-    await assertFails(setDoc(doc(asisten(), 'labs', 'labLat'), { ...validLab(), latitude: 95 }));
-    await assertFails(setDoc(doc(asisten(), 'labs', 'labLng'), { ...validLab(), longitude: -185 }));
-    await assertFails(setDoc(doc(asisten(), 'labs', 'labCos'), { ...validLab(), cosLat: 0 }));
-    await assertFails(setDoc(doc(asisten(), 'labs', 'labCreator'), validLab('ast2')));
-    await assertFails(updateDoc(doc(asisten(), 'labs', LAB_ID), { createdAt: ts(5), updatedAt: serverTimestamp() }));
+    await assertFails(setDoc(doc(aslab(), 'labs', 'labKecil'), { ...validLab('lab1'), radiusMeter: 5 }));
+    await assertFails(setDoc(doc(aslab(), 'labs', 'labBesar'), { ...validLab('lab1'), radiusMeter: 1500 }));
+    await assertFails(setDoc(doc(aslab(), 'labs', 'labLat'), { ...validLab('lab1'), latitude: 95 }));
+    await assertFails(setDoc(doc(aslab(), 'labs', 'labLng'), { ...validLab('lab1'), longitude: -185 }));
+    await assertFails(setDoc(doc(aslab(), 'labs', 'labCos'), { ...validLab('lab1'), cosLat: 0 }));
+    await assertFails(setDoc(doc(aslab(), 'labs', 'labCreator'), validLab('ast2')));
+    await assertFails(updateDoc(doc(aslab(), 'labs', LAB_ID), { createdAt: ts(5), updatedAt: serverTimestamp() }));
+  });
+});
+
+describe('fondasi Sprint 4', () => {
+  const labMember = () => ({
+    labId: LAB_ID,
+    uid: 'prkA',
+    role: 'praktikan',
+    nama: 'Praktikan A',
+    nomorInduk: 'NI-prkA',
+    email: 'a@x.id',
+    assignedBy: 'lab1',
+    assignedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  const attendanceWithTimeliness = () => ({
+    sessionId: OPEN_SESSION,
+    classId: CLASS_ID,
+    praktikanUid: 'prkB',
+    attendedAt: serverTimestamp(),
+    timeliness: 'TERLAMBAT',
+    lateMinutes: 12,
+    gracePeriodMinutes: 10,
+  });
+
+  const fine = () => ({
+    attendanceId: `${OPEN_SESSION}_prkB`,
+    sessionId: OPEN_SESSION,
+    classId: CLASS_ID,
+    labId: null,
+    sessionTitle: 'Modul',
+    labName: '',
+    praktikanUid: 'prkB',
+    amount: 10000,
+    lateMinutes: 12,
+    status: 'UNPAID',
+    latestOrderId: null,
+    latestPaymentStatus: null,
+    issuedAt: serverTimestamp(),
+    paidAt: null,
+    updatedAt: serverTimestamp(),
+  });
+
+  it('aslab dapat membaca semua kelas/sesi dan mengelola labMembers', async () => {
+    await assertSucceeds(getDocs(collection(aslab(), 'classes')));
+    await assertSucceeds(getDocs(collection(aslab(), 'sessions')));
+    const ref = doc(aslab(), 'labMembers', `${LAB_ID}_prkA`);
+    await assertSucceeds(setDoc(ref, labMember()));
+    await assertSucceeds(getDoc(ref));
+    await assertSucceeds(updateDoc(ref, {
+      nama: 'Praktikan A Baru',
+      updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
+  it('asisten dan praktikan tidak dapat mengelola labMembers', async () => {
+    await assertFails(setDoc(doc(asisten(), 'labMembers', `${LAB_ID}_prkA`), {
+      ...labMember(),
+      assignedBy: 'ast1',
+    }));
+    await assertFails(setDoc(doc(praktikanA(), 'labMembers', `${LAB_ID}_prkA`), {
+      ...labMember(),
+      assignedBy: 'prkA',
+    }));
+  });
+
+  it('presensi menerima metadata ketepatan waktu yang valid', async () => {
+    await assertSucceeds(setDoc(
+      doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`),
+      attendanceWithTimeliness(),
+    ));
+  });
+
+  it('praktikan dapat membuat denda UNPAID sendiri tetapi tidak dapat mengubahnya menjadi PAID', async () => {
+    await setDoc(
+      doc(praktikanB(), 'attendances', `${OPEN_SESSION}_prkB`),
+      attendanceWithTimeliness(),
+    );
+    const ref = doc(praktikanB(), 'fines', `${OPEN_SESSION}_prkB`);
+    await assertSucceeds(setDoc(ref, fine()));
+    await assertFails(updateDoc(ref, {
+      status: 'PAID',
+      paidAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+  });
+
+  it('praktikan dan aslab tidak dapat menulis paymentTransactions', async () => {
+    const payload = {
+      orderId: 'order-1',
+      fineId: `${OPEN_SESSION}_prkB`,
+      praktikanUid: 'prkB',
+      amount: 10000,
+      status: 'pending',
+    };
+    await assertFails(setDoc(doc(praktikanB(), 'paymentTransactions', 'order-1'), payload));
+    await assertFails(setDoc(doc(aslab(), 'paymentTransactions', 'order-1'), payload));
+  });
+
+  it('aslab dapat membaca semua denda dan transaksi pembayaran', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'fines', `${OPEN_SESSION}_prkB`), {
+        ...fine(),
+        issuedAt: ts(8),
+        updatedAt: ts(8),
+      });
+      await setDoc(doc(db, 'paymentTransactions', 'order-1'), {
+        orderId: 'order-1',
+        fineId: `${OPEN_SESSION}_prkB`,
+        praktikanUid: 'prkB',
+        amount: 10000,
+        status: 'pending',
+        createdAt: ts(8),
+        updatedAt: ts(8),
+      });
+    });
+    await assertSucceeds(getDocs(collection(aslab(), 'fines')));
+    await assertSucceeds(getDocs(collection(aslab(), 'paymentTransactions')));
   });
 });
 

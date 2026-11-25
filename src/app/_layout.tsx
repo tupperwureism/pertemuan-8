@@ -46,6 +46,7 @@ function RootNavigator() {
         <Stack.Screen name="jadwal/index" options={{ title: 'Daftar Jadwal' }} />
         <Stack.Screen name="peta/index" options={{ title: 'Peta Lab' }} />
         <Stack.Screen name="asisten" />
+        <Stack.Screen name="aslab" />
         <Stack.Screen name="praktikan" />
         <Stack.Screen name="explore" />
       </Stack.Protected>

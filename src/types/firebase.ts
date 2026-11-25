@@ -14,10 +14,13 @@ export type ServerTimestamp = FirestoreTimestamp | null;
 
 // ---------------------------------------------------------------- Enum
 
-export type UserRole = 'praktikan' | 'asisten';
+export type UserRole = 'praktikan' | 'asisten' | 'aslab';
 export type SessionStatus = 'BELUM_DIBUKA' | 'DIBUKA' | 'DITUTUP';
 export type PermissionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type AiStatus = 'PENDING' | 'SUCCEEDED' | 'FAILED';
+export type AttendanceTimeliness = 'TEPAT_WAKTU' | 'TERLAMBAT';
+export type FineStatus = 'UNPAID' | 'PAID';
+export type PaymentStatus = 'pending' | 'success' | 'failed';
 
 // ------------------------------------------------------------- Koleksi
 
@@ -29,6 +32,9 @@ export const COLLECTIONS = {
   attendances: 'attendances',
   permissions: 'permissions',
   labs: 'labs',
+  labMembers: 'labMembers',
+  fines: 'fines',
+  paymentTransactions: 'paymentTransactions',
   pushTokens: 'pushTokens',
 } as const;
 
@@ -93,6 +99,9 @@ export interface AttendanceDoc {
   longitude?: number;
   accuracy?: number;
   distanceMeter?: number;
+  timeliness?: AttendanceTimeliness;
+  lateMinutes?: number;
+  gracePeriodMinutes?: number;
 }
 
 /** permissions/{sessionId_uid} - ID deterministik. */
@@ -122,8 +131,70 @@ export interface LabDoc {
   longitude: number;
   radiusMeter: number;
   cosLat: number;
+  mataKuliah?: string;
+  classId?: string | null;
+  gracePeriodMinutes?: number;
+  fineAmount?: number;
+  asprakIds?: string[];
+  aslabIds?: string[];
   createdBy: string;
   createdAt: ServerTimestamp;
+  updatedAt: ServerTimestamp;
+}
+
+/** labMembers/{labId_uid} - penugasan pengguna pada satu laboratorium. */
+export interface LabMemberDoc {
+  id: string;
+  labId: string;
+  uid: string;
+  role: UserRole;
+  nama: string;
+  nomorInduk: string;
+  email: string;
+  assignedBy: string;
+  assignedAt: ServerTimestamp;
+  updatedAt: ServerTimestamp;
+}
+
+/** fines/{sessionId_uid} - satu denda keterlambatan per praktikan dan sesi. */
+export interface FineDoc {
+  id: string;
+  attendanceId: string;
+  sessionId: string;
+  classId: string;
+  labId: string | null;
+  sessionTitle: string;
+  labName: string;
+  praktikanUid: string;
+  amount: number;
+  lateMinutes: number;
+  status: FineStatus;
+  latestOrderId: string | null;
+  latestPaymentStatus: PaymentStatus | null;
+  issuedAt: ServerTimestamp;
+  paidAt: ServerTimestamp;
+  updatedAt: ServerTimestamp;
+}
+
+/** paymentTransactions/{orderId} - mirror transaksi pembayaran dari backend. */
+export interface PaymentTransactionDoc {
+  id: string;
+  orderId: string;
+  fineId: string;
+  sessionId: string;
+  sessionTitle: string;
+  labName: string;
+  praktikanUid: string;
+  amount: number;
+  status: PaymentStatus;
+  paymentType: string | null;
+  midtransTransactionId: string | null;
+  midtransTransactionStatus: string | null;
+  snapToken: string | null;
+  redirectUrl: string | null;
+  fineIssuedAt: ServerTimestamp;
+  createdAt: ServerTimestamp;
+  settledAt: ServerTimestamp;
   updatedAt: ServerTimestamp;
 }
 
@@ -139,7 +210,9 @@ export interface PushTokenDoc {
 // ------------------------------------------------------- ID deterministik
 
 export const classMemberId = (classId: string, uid: string): string => `${classId}_${uid}`;
+export const labMemberId = (labId: string, uid: string): string => `${labId}_${uid}`;
 export const attendanceId = (sessionId: string, uid: string): string => `${sessionId}_${uid}`;
+export const fineId = (sessionId: string, uid: string): string => `${sessionId}_${uid}`;
 export const permissionId = (sessionId: string, uid: string): string => `${sessionId}_${uid}`;
 
 // ------------------------------------------------------- Callback service

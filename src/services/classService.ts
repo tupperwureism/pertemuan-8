@@ -71,6 +71,13 @@ export function subscribeVisibleClasses(
   callback: (classes: ClassDoc[]) => void,
   onError: ErrorCallback,
 ): Unsubscribe {
+  if (role === 'aslab') {
+    return onSnapshot(
+      classesCol(),
+      (snap) => callback(snap.docs.map(toClass).sort((a, b) => a.nama.localeCompare(b.nama))),
+      (error) => onError(toError(error)),
+    );
+  }
   if (role === 'asisten') return subscribeClasses(callback, onError);
 
   let uid: string;

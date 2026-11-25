@@ -60,6 +60,7 @@ function sortByStart(sessions: SessionDoc[]): SessionDoc[] {
 /**
  * Jadwal untuk pengguna yang login (signature kontrak tidak berubah).
  * - Asisten: sesi pada kelas tempat ia terdaftar pada `assistantIds`.
+ * - Aslab: seluruh sesi untuk kebutuhan operasional lintas kelas.
  * - Praktikan: sesi pada kelas tempat ia menjadi anggota (`classMembers`).
  * Listener dipecah per classId agar sesuai Security Rules yang membatasi akses per kelas.
  */
@@ -77,6 +78,15 @@ export function subscribeSessions(
       if (cancelled) return;
       const profile = withId<UserDoc>(profileSnap);
       if (!profile) throw new Error('Profil pengguna tidak ditemukan.');
+
+      if (profile.role === 'aslab') {
+        stopFanOut = onSnapshot(
+          sessionsCol(),
+          (snap) => callback(sortByStart(snap.docs.map(toSession))),
+          (error) => onError(toError(error)),
+        );
+        return;
+      }
 
       const rootQuery =
         profile.role === 'asisten'

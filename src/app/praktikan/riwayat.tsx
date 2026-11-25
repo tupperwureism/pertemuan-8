@@ -1,5 +1,5 @@
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { router, type Href } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -10,9 +10,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { colors } from '@/components/screen-kit';
 import { useAuth } from '@/context/AuthContext';
+import { useMyFines } from '@/hooks/use-payments';
 import { getClassById, subscribeMyAttendances } from '@/services/attendanceService';
 import { getErrorMessage } from '@/services/authService';
+import { formatRupiah } from '@/services/paymentService';
 import { subscribeSessions } from '@/services/sessionService';
 import type {
   AttendanceDoc,
@@ -42,12 +45,21 @@ function getInitials(name: string): string {
 
 export default function AttendanceHistoryScreen() {
   const { uid, profile, status: authStatus } = useAuth();
+  const { data: myFines } = useMyFines(uid);
 
   const [attendances, setAttendances] = useState<AttendanceDoc[]>([]);
   const [sessionMap, setSessionMap] = useState<Record<string, SessionDoc>>({});
   const [classMap, setClassMap] = useState<Record<string, ClassDoc>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const unpaidSummary = useMemo(() => {
+    const unpaid = (myFines ?? []).filter((fine) => fine.status === 'UNPAID');
+    return {
+      count: unpaid.length,
+      total: unpaid.reduce((sum, fine) => sum + fine.amount, 0),
+    };
+  }, [myFines]);
 
   useEffect(() => {
     if (!uid) {
@@ -76,7 +88,7 @@ export default function AttendanceHistoryScreen() {
         setSessionMap(nextMap);
       },
       () => {
-        // Jangan gagalkan layar riwayat bila metadata sesi belum termuat
+        // Jangan gagalkan layar riwayat bila metadata sesi belum termuat.
       },
     );
 
@@ -86,7 +98,6 @@ export default function AttendanceHistoryScreen() {
     };
   }, [uid]);
 
-  // Ambil detail kelas untuk classId yang muncul di daftar presensi
   useEffect(() => {
     if (!uid || attendances.length === 0) return;
     let cancelled = false;
@@ -147,12 +158,41 @@ export default function AttendanceHistoryScreen() {
           </View>
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.push('/praktikan/izin' as never)}
-          style={({ pressed }) => [styles.permissionSwitchBtn, pressed && styles.pressed]}>
-          <Text style={styles.permissionSwitchText}>Lihat riwayat & status pengajuan izin saya →</Text>
-        </Pressable>
+        <View style={styles.shortcutRow}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/praktikan/denda' as Href)}
+            style={({ pressed }) => [
+              styles.shortcutBtn,
+              unpaidSummary.count > 0 ? styles.finesAlertBtn : styles.finesShortcutBtn,
+              pressed && styles.pressed,
+            ]}>
+            <Text
+              style={[
+                styles.shortcutTitle,
+                unpaidSummary.count > 0 ? styles.finesAlertTitle : styles.finesShortcutTitle,
+              ]}>
+              Tagihan &amp; Denda
+            </Text>
+            <Text
+              style={[
+                styles.shortcutSub,
+                unpaidSummary.count > 0 ? styles.finesAlertSub : styles.finesShortcutSub,
+              ]}>
+              {unpaidSummary.count > 0
+                ? `${unpaidSummary.count} belum dibayar (${formatRupiah(unpaidSummary.total)})`
+                : 'Cek tagihan & riwayat'}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/praktikan/izin' as Href)}
+            style={({ pressed }) => [styles.shortcutBtn, styles.permissionSwitchBtn, pressed && styles.pressed]}>
+            <Text style={styles.permissionSwitchText}>Status Izin</Text>
+            <Text style={styles.permissionSwitchSub}>Riwayat pengajuan izin</Text>
+          </Pressable>
+        </View>
 
         {errorMessage ? (
           <View style={styles.errorCard}>
@@ -171,13 +211,13 @@ export default function AttendanceHistoryScreen() {
 
         {authStatus === 'loading' || (Boolean(uid) && loading) ? (
           <View style={styles.loadingCard}>
-            <ActivityIndicator size="large" color="#2D5BDB" />
+            <ActivityIndicator size="large" color={colors.praktikan} />
             <Text style={styles.loadingText}>Memuat catatan kehadiran dari Firestore...</Text>
           </View>
         ) : !uid ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIcon}>
-              <Text style={styles.emptyIconText}>○</Text>
+              <Text style={styles.emptyIconText}>0</Text>
             </View>
             <Text style={styles.emptyTitle}>Anda belum login</Text>
             <Text style={styles.emptyText}>
@@ -193,7 +233,7 @@ export default function AttendanceHistoryScreen() {
         ) : attendances.length === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.emptyIcon}>
-              <Text style={styles.emptyIconText}>○</Text>
+              <Text style={styles.emptyIconText}>0</Text>
             </View>
             <Text style={styles.emptyTitle}>Belum ada catatan kehadiran</Text>
             <Text style={styles.emptyText}>
@@ -212,26 +252,37 @@ export default function AttendanceHistoryScreen() {
               const sess = sessionMap[item.sessionId];
               const cls = classMap[item.classId];
               const title = cls
-                ? `${cls.mataPraktikum}${sess ? ` - ${sess.judul}` : ''}`
+                ? `${cls.mataPraktikum} - ${sess ? sess.judul : ''}`
                 : (sess?.judul ?? `Sesi ${item.sessionId}`);
               const kelasLabel = cls?.kodeKelas ?? cls?.nama ?? item.classId;
+              const isLate = item.timeliness === 'TERLAMBAT';
+              const lateMins = item.lateMinutes ?? 0;
+              const badgeLabel = isLate
+                ? lateMins > 0
+                  ? `Terlambat (+${lateMins} mnt)`
+                  : 'Terlambat'
+                : 'Tepat Waktu';
 
               return (
                 <Pressable
                   key={item.id}
-                  onPress={() => router.push(`/praktikan/${item.sessionId}` as never)}
+                  onPress={() => router.push(`/praktikan/${item.sessionId}` as Href)}
                   style={({ pressed }) => [styles.historyCard, pressed && styles.pressed]}>
                   <View style={styles.timelineColumn}>
-                    <View style={styles.checkCircle}>
-                      <Text style={styles.checkText}>✓</Text>
+                    <View style={[styles.checkCircle, isLate && styles.lateCircle]}>
+                      <Text style={[styles.checkText, isLate && styles.lateCircleText]}>
+                        {isLate ? '!' : '✓'}
+                      </Text>
                     </View>
                     {index < attendances.length - 1 ? <View style={styles.timelineLine} /> : null}
                   </View>
                   <View style={styles.historyContent}>
                     <View style={styles.historyHeader}>
                       <Text style={styles.historyTitle}>{title}</Text>
-                      <View style={styles.presentBadge}>
-                        <Text style={styles.presentBadgeText}>Hadir</Text>
+                      <View style={[styles.presentBadge, isLate && styles.lateBadge]}>
+                        <Text style={[styles.presentBadgeText, isLate && styles.lateBadgeText]}>
+                          {badgeLabel}
+                        </Text>
                       </View>
                     </View>
                     <Text style={styles.historyMeta}>
@@ -239,7 +290,7 @@ export default function AttendanceHistoryScreen() {
                     </Text>
                     <View style={styles.divider} />
                     <View style={styles.historyFooter}>
-                      <View>
+                      <View style={styles.timeBlock}>
                         <Text style={styles.footerLabel}>Waktu tercatat</Text>
                         <Text style={styles.footerValue}>{formatAttendedTime(item.attendedAt)}</Text>
                       </View>
@@ -250,6 +301,15 @@ export default function AttendanceHistoryScreen() {
                         </Text>
                       </View>
                     </View>
+
+                    {isLate ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => router.push('/praktikan/denda' as Href)}
+                        style={({ pressed }) => [styles.fineLinkRow, pressed && styles.pressed]}>
+                        <Text style={styles.fineLinkText}>Lihat &amp; bayar tagihan denda</Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                 </Pressable>
               );
@@ -262,161 +322,218 @@ export default function AttendanceHistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F5F7FB' },
+  safeArea: { flex: 1, backgroundColor: colors.bg },
   content: {
     alignSelf: 'center',
-    gap: 18,
+    gap: 16,
     maxWidth: 720,
     paddingBottom: 40,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 14,
     width: '100%',
   },
   topBar: { alignItems: 'center', flexDirection: 'row', gap: 12 },
   backButton: {
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4E7EC',
+    backgroundColor: colors.card,
+    borderColor: colors.border,
     borderRadius: 14,
     borderWidth: 1,
     height: 48,
     justifyContent: 'center',
     width: 48,
   },
-  backButtonText: { color: '#17233C', fontSize: 34, lineHeight: 36, marginTop: -3 },
+  backButtonText: { color: colors.text, fontSize: 34, lineHeight: 36, marginTop: -3 },
   topBarCopy: { flex: 1 },
-  eyebrow: { color: '#667085', fontSize: 11, fontWeight: '700', letterSpacing: 1.3 },
-  pageTitle: { color: '#101828', fontSize: 24, fontWeight: '800', marginTop: 2 },
+  eyebrow: { color: '#475569', fontSize: 11, fontWeight: '700', letterSpacing: 1.1 },
+  pageTitle: { color: colors.text, fontSize: 22, fontWeight: '800', marginTop: 2 },
   profileCard: {
     alignItems: 'center',
     backgroundColor: '#172E73',
-    borderRadius: 22,
+    borderRadius: 20,
     flexDirection: 'row',
     padding: 18,
   },
   avatar: {
     alignItems: 'center',
-    backgroundColor: '#D9E2FF',
+    backgroundColor: '#DBEAFE',
     borderRadius: 22,
     height: 44,
     justifyContent: 'center',
     width: 44,
   },
-  avatarText: { color: '#173E9A', fontSize: 14, fontWeight: '900' },
-  profileCopy: { flex: 1, marginLeft: 12 },
+  avatarText: { color: '#1E40AF', fontSize: 14, fontWeight: '900' },
+  profileCopy: { flex: 1, minWidth: 0, marginLeft: 12 },
   profileName: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
-  profileNim: { color: '#B9C8FF', fontSize: 12, marginTop: 3 },
+  profileNim: { color: '#DBEAFE', fontSize: 12, marginTop: 3 },
   totalBadge: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.14)',
     borderRadius: 14,
     minWidth: 56,
     paddingHorizontal: 11,
     paddingVertical: 8,
   },
   totalNumber: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
-  totalLabel: { color: '#B9C8FF', fontSize: 10, fontWeight: '700' },
-  permissionSwitchBtn: {
-    alignItems: 'center',
-    backgroundColor: '#EEF4FF',
-    borderColor: '#C7D7FE',
+  totalLabel: { color: '#DBEAFE', fontSize: 10, fontWeight: '700' },
+  shortcutRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  shortcutBtn: {
+    flex: 1,
+    minHeight: 58,
     borderRadius: 14,
     borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    justifyContent: 'center',
+    gap: 2,
   },
-  permissionSwitchText: { color: '#1D4ED8', fontSize: 13, fontWeight: '800' },
+  finesShortcutBtn: {
+    backgroundColor: colors.card,
+    borderColor: colors.border,
+  },
+  finesAlertBtn: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74',
+  },
+  shortcutTitle: { fontSize: 13, fontWeight: '800' },
+  shortcutSub: { fontSize: 11, fontWeight: '600' },
+  finesShortcutTitle: { color: colors.text },
+  finesShortcutSub: { color: '#475569' },
+  finesAlertTitle: { color: '#9A3412' },
+  finesAlertSub: { color: '#9A3412' },
+  permissionSwitchBtn: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#BFDBFE',
+  },
+  permissionSwitchText: { color: '#1E40AF', fontSize: 13, fontWeight: '800' },
+  permissionSwitchSub: { color: '#1E40AF', fontSize: 11, fontWeight: '600' },
   errorCard: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
+    backgroundColor: colors.dangerBg,
+    borderColor: colors.dangerBorder,
     borderRadius: 16,
     borderWidth: 1,
     padding: 14,
   },
-  errorTitle: { color: '#991B1B', fontSize: 13, fontWeight: '800' },
-  errorText: { color: '#7F1D1D', fontSize: 12, lineHeight: 18, marginTop: 4 },
+  errorTitle: { color: colors.dangerText, fontSize: 13, fontWeight: '800' },
+  errorText: { color: colors.dangerText, fontSize: 12, lineHeight: 18, marginTop: 4 },
   loadingCard: {
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4E7EC',
+    backgroundColor: colors.card,
+    borderColor: colors.border,
     borderRadius: 20,
     borderWidth: 1,
     gap: 12,
     paddingVertical: 40,
   },
-  loadingText: { color: '#475467', fontSize: 13, fontWeight: '600' },
+  loadingText: { color: '#475569', fontSize: 13, fontWeight: '600' },
   sectionHeader: {
     alignItems: 'flex-end',
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 2,
   },
-  sectionEyebrow: { color: '#2D5BDB', fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
-  sectionTitle: { color: '#101828', fontSize: 21, fontWeight: '800', marginTop: 3 },
-  itemCount: { color: '#667085', fontSize: 12, fontWeight: '700' },
+  sectionEyebrow: { color: colors.praktikan, fontSize: 11, fontWeight: '800', letterSpacing: 1.1 },
+  sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '800', marginTop: 2 },
+  itemCount: { color: '#475569', fontSize: 12, fontWeight: '700' },
   list: { gap: 12 },
   historyCard: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#E4E7EC',
-    borderRadius: 20,
+    backgroundColor: colors.card,
+    borderColor: colors.border,
+    borderRadius: 18,
     borderWidth: 1,
     flexDirection: 'row',
-    padding: 17,
+    padding: 16,
   },
   timelineColumn: { alignItems: 'center', marginRight: 13 },
   checkCircle: {
     alignItems: 'center',
-    backgroundColor: '#DDF8E8',
+    backgroundColor: '#DCFCE7',
     borderRadius: 15,
     height: 30,
     justifyContent: 'center',
     width: 30,
   },
-  checkText: { color: '#0E8C52', fontSize: 16, fontWeight: '900' },
-  timelineLine: { backgroundColor: '#D0D5DD', flex: 1, marginTop: 7, minHeight: 22, width: 2 },
-  historyContent: { flex: 1 },
+  lateCircle: {
+    backgroundColor: '#FFEDD5',
+  },
+  checkText: { color: '#166534', fontSize: 15, fontWeight: '900' },
+  lateCircleText: { color: '#9A3412' },
+  timelineLine: { backgroundColor: colors.border, flex: 1, marginTop: 7, minHeight: 22, width: 2 },
+  historyContent: { flex: 1, minWidth: 0 },
   historyHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 10 },
-  historyTitle: { color: '#101828', flex: 1, fontSize: 15, fontWeight: '800', lineHeight: 21 },
-  presentBadge: { backgroundColor: '#ECFDF3', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 },
-  presentBadgeText: { color: '#067647', fontSize: 10, fontWeight: '800' },
-  historyMeta: { color: '#667085', fontSize: 12, marginTop: 5 },
-  divider: { backgroundColor: '#EAECF0', height: 1, marginVertical: 13 },
+  historyTitle: { color: colors.text, flex: 1, fontSize: 15, fontWeight: '800', lineHeight: 21 },
+  presentBadge: {
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  lateBadge: {
+    backgroundColor: '#FFEDD5',
+    borderColor: '#FDBA74',
+  },
+  presentBadgeText: { color: '#166534', fontSize: 10, fontWeight: '800' },
+  lateBadgeText: { color: '#9A3412' },
+  historyMeta: { color: '#475569', fontSize: 12, marginTop: 5 },
+  divider: { backgroundColor: colors.border, height: 1, marginVertical: 12 },
   historyFooter: { flexDirection: 'row', gap: 16 },
-  footerLabel: { color: '#98A2B3', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-  footerValue: { color: '#17233C', fontSize: 13, fontWeight: '800', marginTop: 4 },
-  noteBlock: { flex: 1 },
-  noteValue: { color: '#475467', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  timeBlock: { flex: 1, minWidth: 0 },
+  footerLabel: { color: '#475569', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+  footerValue: { color: colors.text, fontSize: 13, fontWeight: '800', marginTop: 4 },
+  noteBlock: { flex: 1, minWidth: 0 },
+  noteValue: { color: '#334155', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  fineLinkRow: {
+    marginTop: 10,
+    minHeight: 40,
+    borderRadius: 10,
+    backgroundColor: '#FFEDD5',
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fineLinkText: {
+    color: '#9A3412',
+    fontSize: 12,
+    fontWeight: '800',
+  },
   emptyCard: {
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderColor: '#D0D5DD',
-    borderRadius: 22,
+    backgroundColor: colors.card,
+    borderColor: colors.inputBorder,
+    borderRadius: 20,
     borderStyle: 'dashed',
     borderWidth: 1,
     paddingHorizontal: 24,
-    paddingVertical: 38,
+    paddingVertical: 36,
   },
   emptyIcon: {
     alignItems: 'center',
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#EFF6FF',
     borderRadius: 30,
     height: 60,
     justifyContent: 'center',
     width: 60,
   },
-  emptyIconText: { color: '#2D5BDB', fontSize: 38, lineHeight: 40 },
-  emptyTitle: { color: '#101828', fontSize: 18, fontWeight: '800', marginTop: 17, textAlign: 'center' },
-  emptyText: { color: '#667085', fontSize: 14, lineHeight: 21, marginTop: 7, textAlign: 'center' },
+  emptyIconText: { color: colors.praktikan, fontSize: 28, fontWeight: '800' },
+  emptyTitle: { color: colors.text, fontSize: 18, fontWeight: '800', marginTop: 16, textAlign: 'center' },
+  emptyText: { color: '#475569', fontSize: 14, lineHeight: 21, marginTop: 7, textAlign: 'center' },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: '#2D5BDB',
+    backgroundColor: colors.praktikan,
     borderRadius: 14,
     justifyContent: 'center',
     marginTop: 20,
-    minHeight: 50,
+    minHeight: 48,
     paddingHorizontal: 22,
   },
-  primaryButtonPressed: { backgroundColor: '#2048B5', transform: [{ scale: 0.99 }] },
+  primaryButtonPressed: { backgroundColor: '#1D4ED8', transform: [{ scale: 0.99 }] },
   primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  pressed: { opacity: 0.72 },
+  pressed: { opacity: 0.78 },
 });

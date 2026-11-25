@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams, type Href } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -14,9 +14,18 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ErrorBanner, ErrorState, LoadingState } from '@/components/screen-kit';
-import { useSession, useSessionRecap, useUserProfiles, useVisibleClasses } from '@/hooks/use-firestore-data';
+import {
+  useLabs,
+  useSession,
+  useSessionRecap,
+  useUserProfiles,
+  useVisibleClasses,
+} from '@/hooks/use-firestore-data';
+import { useSubscription } from '@/hooks/use-subscription';
 import { formatClock, formatSessionTime } from '@/lib/format';
 import { getErrorMessage } from '@/services/authService';
+import { formatRupiah } from '@/services/paymentService';
+import { subscribeAllPermissions } from '@/services/permissionService';
 import { closeSession, openSession } from '@/services/sessionService';
 import type { AttendanceDoc, SessionStatus } from '@/types/firebase';
 
@@ -24,12 +33,34 @@ export default function AsistenSessionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const sessionId = Array.isArray(id) ? id[0] : id;
 
-  // Semua data real-time dari Firestore; listener dibersihkan otomatis saat layar ditutup.
   const { data: session, loading, error, retry } = useSession(sessionId);
   const { data: classes } = useVisibleClasses('asisten');
+  const { data: labs } = useLabs();
   const { data: attendances, error: recapError } = useSessionRecap(sessionId);
-  const recap: AttendanceDoc[] = attendances ?? [];
-  const profiles = useUserProfiles(recap.map((a) => a.praktikanUid));
+  const {
+    data: allPermissions,
+    loading: permissionsLoading,
+    error: permissionsError,
+    retry: retryPermissions,
+  } = useSubscription(subscribeAllPermissions);
+
+  const recap: AttendanceDoc[] = useMemo(() => attendances ?? [], [attendances]);
+  const approvedPermissions = useMemo(
+    () =>
+      (allPermissions ?? []).filter(
+        (perm) => perm.sessionId === sessionId && perm.status === 'APPROVED',
+      ),
+    [allPermissions, sessionId],
+  );
+
+  const profileUids = useMemo(
+    () => [
+      ...recap.map((a) => a.praktikanUid),
+      ...approvedPermissions.map((p) => p.praktikanUid),
+    ],
+    [recap, approvedPermissions],
+  );
+  const profiles = useUserProfiles(profileUids);
 
   const [catatanDraft, setCatatanDraft] = useState<string | null>(null);
   const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
@@ -42,7 +73,7 @@ export default function AsistenSessionDetailScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <LoadingState label="Memuat sesi…" />
+        <LoadingState label="Memuat sesi..." />
       </SafeAreaView>
     );
   }
@@ -75,25 +106,30 @@ export default function AsistenSessionDetailScreen() {
     );
   }
 
-  const className = classes?.find((c) => c.id === session.classId)?.kodeKelas ?? '…';
+  const className = classes?.find((c) => c.id === session.classId)?.kodeKelas ?? '...';
+  const lab = session.labId ? (labs?.find((l) => l.id === session.labId) ?? null) : null;
+  const gracePeriodMinutes = lab?.gracePeriodMinutes ?? 15;
+  const fineAmount = lab?.fineAmount ?? 10_000;
   const catatanInput = catatanDraft ?? session.catatan;
 
   const isBelumDibuka = session.status === 'BELUM_DIBUKA';
   const isDibuka = session.status === 'DIBUKA';
   const isDitutup = session.status === 'DITUTUP';
 
+  const onTimeCount = recap.filter((item) => item.timeliness !== 'TERLAMBAT').length;
+  const lateCount = recap.filter((item) => item.timeliness === 'TERLAMBAT').length;
+
   const targetStatus: SessionStatus | null = isBelumDibuka
     ? 'DIBUKA'
     : isDibuka
-    ? 'DITUTUP'
-    : null;
+      ? 'DITUTUP'
+      : null;
 
   const handleOpenModal = () => {
     if (isDitutup) return;
     setIsModalVisible(true);
   };
 
-  // Konfirmasi lewat modal, lalu status diubah lewat transaksi Firestore (maju satu langkah saja).
   const handleConfirmStatusChange = async () => {
     if (!targetStatus || saving) return;
     setSaving(true);
@@ -161,7 +197,7 @@ export default function AsistenSessionDetailScreen() {
             >
               <Text style={styles.topBackButtonText}>Kembali</Text>
             </Pressable>
-            <Text style={styles.topBarTitle}>Detail Sesi Asisten</Text>
+            <Text style={styles.topBarTitle}>Detail Sesi Asprak</Text>
             <View style={styles.topBarRightSpacer} />
           </View>
 
@@ -189,18 +225,25 @@ export default function AsistenSessionDetailScreen() {
               <Text style={styles.metaValue}>{session.ruangan}</Text>
             </View>
 
+            <View style={styles.metaRow}>
+              <Text style={styles.metaLabel}>Toleransi:</Text>
+              <Text style={styles.metaValue}>
+                {gracePeriodMinutes} menit setelah mulai · Denda {formatRupiah(fineAmount)}
+              </Text>
+            </View>
+
             <View style={styles.currentNoteBox}>
-              <Text style={styles.currentNoteLabel}>Catatan Asisten:</Text>
+              <Text style={styles.currentNoteLabel}>Catatan Asprak:</Text>
               <Text style={styles.currentNoteValue}>
                 {session.catatan.trim().length > 0
                   ? session.catatan
-                  : 'Belum ada catatan asisten'}
+                  : 'Belum ada catatan Asprak'}
               </Text>
             </View>
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Form & Kontrol Sesi Praktikum</Text>
+            <Text style={styles.sectionTitle}>Kontrol Sesi Praktikum</Text>
             <Text style={styles.inputHelpText}>
               Isi catatan atau instruksi praktikum sebelum membuka atau menutup sesi.
             </Text>
@@ -228,7 +271,7 @@ export default function AsistenSessionDetailScreen() {
             {actionError ? <ErrorBanner message={actionError} /> : null}
 
             <View style={styles.actionSectionContainer}>
-              {isBelumDibuka && (
+              {isBelumDibuka ? (
                 <Pressable
                   accessibilityRole="button"
                   onPress={handleOpenModal}
@@ -239,9 +282,9 @@ export default function AsistenSessionDetailScreen() {
                 >
                   <Text style={styles.buttonActionText}>Buka Sesi</Text>
                 </Pressable>
-              )}
+              ) : null}
 
-              {isDibuka && (
+              {isDibuka ? (
                 <Pressable
                   accessibilityRole="button"
                   onPress={handleOpenModal}
@@ -252,9 +295,9 @@ export default function AsistenSessionDetailScreen() {
                 >
                   <Text style={styles.buttonActionText}>Tutup Sesi</Text>
                 </Pressable>
-              )}
+              ) : null}
 
-              {isDitutup && (
+              {isDitutup ? (
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ disabled: true }}
@@ -265,7 +308,7 @@ export default function AsistenSessionDetailScreen() {
                     Sesi Praktikum Telah Ditutup
                   </Text>
                 </Pressable>
-              )}
+              ) : null}
             </View>
           </View>
 
@@ -279,7 +322,17 @@ export default function AsistenSessionDetailScreen() {
               </View>
             </View>
 
-            {/* SRS-04 requires an explicit Empty State when daftarHadir is empty. */}
+            {recap.length > 0 ? (
+              <View style={styles.summaryPillRow}>
+                <View style={styles.onTimePill}>
+                  <Text style={styles.onTimePillText}>{onTimeCount} Tepat Waktu</Text>
+                </View>
+                <View style={styles.latePill}>
+                  <Text style={styles.latePillText}>{lateCount} Terlambat</Text>
+                </View>
+              </View>
+            ) : null}
+
             {recapError ? (
               <ErrorBanner message={getErrorMessage(recapError)} />
             ) : recap.length === 0 ? (
@@ -290,24 +343,107 @@ export default function AsistenSessionDetailScreen() {
               </View>
             ) : (
               <View style={styles.attendanceListContainer}>
-                {recap.map((item) => (
-                  <View key={item.id} style={styles.attendanceItemCard}>
-                    <View style={styles.attendanceItemLeft}>
-                      <Text style={styles.praktikanNameText}>
-                        {profiles[item.praktikanUid]?.nama ?? 'Memuat nama…'}
-                      </Text>
-                      <Text style={styles.praktikanNimText}>NIM: {profiles[item.praktikanUid]?.nomorInduk || '-'}</Text>
-                      {item.catatan && item.catatan.trim().length > 0 ? (
-                        <Text style={styles.praktikanCatatanText}>
-                          Catatan: &quot;{item.catatan}&quot;
+                {recap.map((item) => {
+                  const isLate = item.timeliness === 'TERLAMBAT';
+                  const lateMins = item.lateMinutes ?? 0;
+                  const timelinessLabel = isLate
+                    ? lateMins > 0
+                      ? `Terlambat (+${lateMins} mnt)`
+                      : 'Terlambat'
+                    : 'Tepat Waktu';
+
+                  return (
+                    <View key={item.id} style={styles.attendanceItemCard}>
+                      <View style={styles.attendanceItemLeft}>
+                        <Text style={styles.praktikanNameText}>
+                          {profiles[item.praktikanUid]?.nama ?? 'Memuat nama...'}
                         </Text>
-                      ) : null}
+                        <Text style={styles.praktikanNimText}>
+                          NIM: {profiles[item.praktikanUid]?.nomorInduk || '-'}
+                        </Text>
+                        {item.catatan && item.catatan.trim().length > 0 ? (
+                          <Text style={styles.praktikanCatatanText}>
+                            Catatan: &quot;{item.catatan}&quot;
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View style={styles.attendanceBadgesCol}>
+                        <View style={styles.waktuHadirBadge}>
+                          <Text style={styles.waktuHadirBadgeText}>
+                            {formatClock(item.attendedAt)}
+                          </Text>
+                        </View>
+                        <View
+                          style={[
+                            styles.timelinessBadge,
+                            isLate ? styles.timelinessLate : styles.timelinessOnTime,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.timelinessText,
+                              isLate ? styles.timelinessTextLate : styles.timelinessTextOnTime,
+                            ]}
+                          >
+                            {timelinessLabel}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
-                    <View style={styles.waktuHadirBadge}>
-                      <Text style={styles.waktuHadirBadgeText}>
-                        {formatClock(item.attendedAt)}
-                      </Text>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.card}>
+            <View style={styles.rekapHeaderRow}>
+              <Text style={styles.sectionTitle}>Izin Disetujui</Text>
+              <View style={styles.excusedCountBadge}>
+                <Text style={styles.excusedCountText}>
+                  {approvedPermissions.length} Praktikan
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.excusedSubtext}>
+              Excused absence: tercatat terpisah dari kehadiran dan bebas dari tagihan denda.
+            </Text>
+
+            {permissionsError ? (
+              <View style={styles.permissionErrorBox}>
+                <ErrorBanner message={getErrorMessage(permissionsError)} />
+                <Pressable accessibilityRole="button" onPress={retryPermissions} style={styles.retryLink}>
+                  <Text style={styles.retryLinkText}>Muat ulang daftar izin</Text>
+                </Pressable>
+              </View>
+            ) : permissionsLoading ? (
+              <Text style={styles.emptyStateText}>Memuat data izin...</Text>
+            ) : approvedPermissions.length === 0 ? (
+              <View style={styles.emptyStateContainer}>
+                <Text style={styles.emptyStateText}>
+                  Belum ada praktikan dengan izin disetujui pada sesi ini.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.attendanceListContainer}>
+                {approvedPermissions.map((perm) => (
+                  <View key={perm.id} style={styles.excusedItemCard}>
+                    <View style={styles.excusedTopRow}>
+                      <View style={styles.attendanceItemLeft}>
+                        <Text style={styles.praktikanNameText}>
+                          {profiles[perm.praktikanUid]?.nama ?? 'Memuat nama...'}
+                        </Text>
+                        <Text style={styles.praktikanNimText}>
+                          NIM: {profiles[perm.praktikanUid]?.nomorInduk || '-'}
+                        </Text>
+                      </View>
+                      <View style={styles.excusedBadge}>
+                        <Text style={styles.excusedBadgeText}>Bebas Denda</Text>
+                      </View>
                     </View>
+                    <Text style={styles.praktikanCatatanText}>
+                      Alasan: &quot;{perm.alasan}&quot;
+                    </Text>
                   </View>
                 ))}
               </View>
@@ -349,7 +485,7 @@ export default function AsistenSessionDetailScreen() {
               <Text style={styles.modalNotePreviewContent}>
                 {catatanInput.trim().length > 0
                   ? catatanInput.trim()
-                  : 'Belum ada catatan asisten'}
+                  : 'Belum ada catatan Asprak'}
               </Text>
             </View>
 
@@ -376,7 +512,7 @@ export default function AsistenSessionDetailScreen() {
                 ]}
               >
                 <Text style={styles.modalConfirmButtonText}>
-                  {saving ? 'Memproses…' : isBelumDibuka ? 'Ya, Buka Sesi' : 'Ya, Tutup Sesi'}
+                  {saving ? 'Memproses...' : isBelumDibuka ? 'Ya, Buka Sesi' : 'Ya, Tutup Sesi'}
                 </Text>
               </Pressable>
             </View>
@@ -636,12 +772,43 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0F172A',
   },
+  summaryPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  onTimePill: {
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  onTimePillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  latePill: {
+    backgroundColor: '#FFEDD5',
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  latePillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#9A3412',
+  },
   emptyStateContainer: {
     backgroundColor: '#F8FAFC',
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#CBD5E1',
-    padding: 24,
+    padding: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -668,7 +835,12 @@ const styles = StyleSheet.create({
   },
   attendanceItemLeft: {
     flex: 1,
+    minWidth: 0,
     gap: 2,
+  },
+  attendanceBadgesCol: {
+    alignItems: 'flex-end',
+    gap: 6,
   },
   praktikanNameText: {
     fontSize: 14,
@@ -694,12 +866,94 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#64748B',
-    alignSelf: 'flex-start',
   },
   waktuHadirBadgeText: {
     fontSize: 12,
     fontWeight: '700',
     color: '#0F172A',
+  },
+  timelinessBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  timelinessOnTime: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#86EFAC',
+  },
+  timelinessLate: {
+    backgroundColor: '#FFEDD5',
+    borderColor: '#FDBA74',
+  },
+  timelinessText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  timelinessTextOnTime: {
+    color: '#166534',
+  },
+  timelinessTextLate: {
+    color: '#9A3412',
+  },
+  excusedCountBadge: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  excusedCountText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E40AF',
+  },
+  excusedSubtext: {
+    fontSize: 12,
+    color: '#475569',
+    lineHeight: 18,
+  },
+  excusedItemCard: {
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    gap: 6,
+  },
+  excusedTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  excusedBadge: {
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  excusedBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  permissionErrorBox: {
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  retryLink: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  retryLinkText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#5B21B6',
   },
   modalOverlay: {
     flex: 1,

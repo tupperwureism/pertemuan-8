@@ -36,6 +36,7 @@ import {
   type AttendanceLocation,
 } from '@/services/attendanceService';
 import { getErrorMessage } from '@/services/authService';
+import { formatRupiah } from '@/services/paymentService';
 import {
   subscribeMySessionPermission,
   type PermissionDocWithMeta,
@@ -49,9 +50,9 @@ import type {
 } from '@/types/firebase';
 
 const STATUS_META: Record<SessionStatus, { label: string; background: string; color: string }> = {
-  BELUM_DIBUKA: { label: 'Belum dibuka', background: '#FFF4D6', color: '#8A5A00' },
-  DIBUKA: { label: 'Sedang dibuka', background: '#DDF8E8', color: '#146C43' },
-  DITUTUP: { label: 'Sesi ditutup', background: '#FFE1E1', color: '#A12727' },
+  BELUM_DIBUKA: { label: 'Belum dibuka', background: '#FEF3C7', color: '#92400E' },
+  DIBUKA: { label: 'Sedang dibuka', background: '#DCFCE7', color: '#166534' },
+  DITUTUP: { label: 'Sesi ditutup', background: '#FEE2E2', color: '#991B1B' },
 };
 
 function formatAttendedDateTime(ts: FirestoreTimestamp | null | undefined, fallback?: Date): string {
@@ -154,7 +155,7 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <ScreenHeader title="Presensi Sesi" onBack={goBack} />
         <View style={styles.flexCenter}>
-          <LoadingState label="Memuat data sesi presensi…" />
+          <LoadingState label="Memuat data sesi presensi..." />
         </View>
       </SafeAreaView>
     );
@@ -177,7 +178,7 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
         <ScreenHeader title="Presensi Sesi" onBack={goBack} />
         <View style={styles.flexCenter}>
           <EmptyState
-            icon="🔎"
+            icon="?"
             title="Sesi tidak ditemukan"
             subtitle={`Sesi dengan ID "${sessionId}" tidak tersedia atau Anda bukan anggota kelas ini.`}
             action={<PrimaryButton label="Kembali ke Jadwal" onPress={() => router.replace('/jadwal' as Href)} />}
@@ -191,6 +192,8 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
     ? session.labId
     : null;
   const lab = sessionLabId ? (labs?.find((item) => item.id === sessionLabId) ?? null) : null;
+  const gracePeriodMinutes = lab?.gracePeriodMinutes ?? 15;
+  const fineAmount = lab?.fineAmount ?? 10_000;
 
   const locationCheck = evaluateLocationCheck({
     sessionLabId,
@@ -206,6 +209,8 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
   const isSessionOpen = session.status === 'DIBUKA';
   const hasBlockingPermission = Boolean(permission && permission.status !== 'REJECTED');
   const isAlreadyAttended = Boolean(attendance);
+  const isLate = attendance?.timeliness === 'TERLAMBAT';
+  const lateMinutes = attendance?.lateMinutes ?? 0;
 
   const canAttend = Boolean(
     uid &&
@@ -235,7 +240,7 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
           ? 'Presensi tidak tersedia karena izin Anda pada sesi ini sudah diterima.'
           : 'Presensi tidak tersedia karena pengajuan izin Anda sedang menunggu pemeriksaan.';
     } else if (session.status === 'BELUM_DIBUKA') {
-      disabledReason = 'Sesi praktikum belum dibuka oleh asisten.';
+      disabledReason = 'Sesi praktikum belum dibuka oleh Asprak.';
     } else if (session.status === 'DITUTUP') {
       disabledReason = 'Sesi praktikum sudah ditutup.';
     } else if (!locationCheck.canAttendByLocation) {
@@ -275,7 +280,7 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
   };
 
   const courseTitle = classDoc
-    ? `${classDoc.mataPraktikum} — ${session.judul}`
+    ? `${classDoc.mataPraktikum}: ${session.judul}`
     : session.judul;
   const classLabel = classDoc?.kodeKelas ?? classDoc?.nama ?? '-';
   const labDisplayName = lab?.nama ?? session.ruangan;
@@ -325,12 +330,15 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
             {sessionLabId ? (
               <View style={styles.labInfoBox}>
                 <Text style={styles.labInfoTitle}>
-                  Titik Laboratorium: {lab ? lab.nama : 'Memuat…'}
+                  Titik Laboratorium: {lab ? lab.nama : 'Memuat...'}
                 </Text>
                 <Text style={styles.labInfoSub}>
                   {lab
                     ? `${lab.gedung} · Radius presensi ${lab.radiusMeter} m`
-                    : 'Memeriksa informasi gedung dan radius laboratorium…'}
+                    : 'Memeriksa informasi gedung dan radius laboratorium...'}
+                </Text>
+                <Text style={styles.labPolicyText}>
+                  Batas keterlambatan {gracePeriodMinutes} menit · Denda terlambat {formatRupiah(fineAmount)}
                 </Text>
               </View>
             ) : (
@@ -338,6 +346,9 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
                 <Text style={styles.labInfoTitle}>Ruangan: {session.ruangan}</Text>
                 <Text style={styles.labInfoSub}>
                   Sesi ini tidak memiliki titik koordinat laboratorium.
+                </Text>
+                <Text style={styles.labPolicyText}>
+                  Batas keterlambatan {gracePeriodMinutes} menit · Denda terlambat {formatRupiah(fineAmount)}
                 </Text>
               </View>
             )}
@@ -351,36 +362,66 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
           ) : null}
 
           {isAlreadyAttended ? (
-            <View style={styles.resultCard}>
+            <View style={[styles.resultCard, isLate ? styles.resultCardLate : styles.resultCardOnTime]}>
               <View style={styles.resultHeader}>
-                <View style={styles.resultIcon}>
-                  <Text style={styles.resultIconText}>✓</Text>
+                <View style={[styles.resultIcon, isLate ? styles.resultIconLate : styles.resultIconOnTime]}>
+                  <Text style={styles.resultIconText}>{isLate ? '!' : '✓'}</Text>
                 </View>
                 <View style={styles.flex}>
-                  <Text style={styles.resultTitle}>Presensi berhasil tercatat</Text>
-                  <Text style={styles.resultSub}>
+                  <View style={styles.resultTitleRow}>
+                    <Text style={[styles.resultTitle, isLate && styles.resultTitleLate]}>
+                      Presensi berhasil tercatat
+                    </Text>
+                    <View style={[styles.timelinessBadge, isLate ? styles.timelinessLate : styles.timelinessOnTime]}>
+                      <Text style={[styles.timelinessBadgeText, isLate ? styles.timelinessTextLate : styles.timelinessTextOnTime]}>
+                        {isLate
+                          ? lateMinutes > 0
+                            ? `Terlambat (+${lateMinutes} mnt)`
+                            : 'Terlambat'
+                          : 'Tepat Waktu'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.resultSub, isLate && styles.resultSubLate]}>
                     Kehadiran Anda pada sesi ini sudah tersimpan di Firestore.
                   </Text>
                 </View>
               </View>
 
               <View style={styles.resultStatsRow}>
-                <View style={styles.resultStatBox}>
+                <View style={[styles.resultStatBox, isLate && styles.resultStatBoxLate]}>
                   <Text style={styles.resultStatLabel}>Waktu hadir</Text>
                   <Text style={styles.resultStatValue}>
                     {formatAttendedDateTime(attendance?.attendedAt, submittedMeta?.submittedAt)}
                   </Text>
                 </View>
                 {recordedDistance !== null ? (
-                  <View style={styles.resultStatBox}>
+                  <View style={[styles.resultStatBox, isLate && styles.resultStatBoxLate]}>
                     <Text style={styles.resultStatLabel}>Jarak ke lab</Text>
                     <Text style={styles.resultStatValue}>{recordedDistance} m</Text>
                   </View>
                 ) : null}
               </View>
 
+              {isLate ? (
+                <View style={styles.fineNoticeBox}>
+                  <Text style={styles.fineNoticeTitle}>Tagihan denda telah diterbitkan</Text>
+                  <Text style={styles.fineNoticeText}>
+                    Presensi melewati batas toleransi. Silakan selesaikan pembayaran denda; pembayaran tidak mengubah status kehadiran pada sesi ini.
+                  </Text>
+                </View>
+              ) : null}
+
               {attendance?.catatan ? (
-                <Text style={styles.resultNote}>Catatan: “{attendance.catatan}”</Text>
+                <Text style={styles.resultNote}>Catatan: &quot;{attendance.catatan}&quot;</Text>
+              ) : null}
+
+              {isLate ? (
+                <PrimaryButton
+                  label="Lihat & Bayar Denda"
+                  tone="danger"
+                  onPress={() => router.push('/praktikan/denda' as Href)}
+                />
               ) : null}
 
               <View style={styles.resultActionsRow}>
@@ -424,7 +465,7 @@ function PraktikanAttendanceContent({ sessionId }: { sessionId: string }) {
                       ? 'Contoh: Hadir tepat waktu'
                       : 'Catatan dapat diisi saat syarat presensi terpenuhi'
                   }
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor="#64748B"
                   style={[styles.noteInput, !canAttend && styles.noteInputDisabled]}
                   textAlignVertical="top"
                   value={catatan}
@@ -481,7 +522,7 @@ function MetaItem({ label, value, wide = false }: { label: string; value: string
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  flex: { flex: 1, minWidth: 0 },
   flexCenter: { flex: 1, justifyContent: 'center' },
   safeArea: { flex: 1, backgroundColor: colors.bg },
   content: {
@@ -507,7 +548,7 @@ const styles = StyleSheet.create({
   },
   statusBadge: {
     alignItems: 'center',
-    borderRadius: 999,
+    borderRadius: 8,
     flexDirection: 'row',
     gap: 7,
     paddingHorizontal: 12,
@@ -515,7 +556,7 @@ const styles = StyleSheet.create({
   },
   statusDot: { borderRadius: 4, height: 8, width: 8 },
   statusText: { fontSize: 12, fontWeight: '800' },
-  studentTag: { color: '#C7D7FE', fontSize: 12, fontWeight: '700' },
+  studentTag: { color: '#DBEAFE', fontSize: 12, fontWeight: '700' },
   sessionTitle: {
     color: '#FFFFFF',
     fontSize: 20,
@@ -525,7 +566,7 @@ const styles = StyleSheet.create({
   metaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   metaItem: {
     backgroundColor: 'rgba(255,255,255,0.1)',
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.16)',
     borderRadius: 12,
     borderWidth: 1,
     flexGrow: 1,
@@ -534,7 +575,7 @@ const styles = StyleSheet.create({
   },
   metaItemWide: { flexBasis: '100%' },
   metaLabel: {
-    color: '#B9C8FF',
+    color: '#DBEAFE',
     fontSize: 10,
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -543,11 +584,12 @@ const styles = StyleSheet.create({
   labInfoBox: {
     backgroundColor: 'rgba(255,255,255,0.14)',
     borderRadius: 12,
-    gap: 2,
+    gap: 3,
     padding: 12,
   },
   labInfoTitle: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   labInfoSub: { color: '#DBEAFE', fontSize: 12, lineHeight: 18 },
+  labPolicyText: { color: '#E2E8F0', fontSize: 12, fontWeight: '700', marginTop: 2 },
   sectionBlock: { gap: 8 },
   sectionLabel: {
     color: colors.praktikan,
@@ -574,60 +616,125 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  noteInputDisabled: { backgroundColor: '#F1F5F9', color: '#94A3B8' },
-  charCount: { color: '#94A3B8', fontSize: 11, marginTop: 6, textAlign: 'right' },
+  noteInputDisabled: { backgroundColor: '#F1F5F9', color: '#475569' },
+  charCount: { color: '#475569', fontSize: 11, marginTop: 6, textAlign: 'right' },
   resultCard: {
-    backgroundColor: '#ECFDF3',
-    borderColor: '#ABEFC6',
     borderRadius: 20,
     borderWidth: 1,
     gap: 14,
     padding: 18,
   },
+  resultCardOnTime: {
+    backgroundColor: '#ECFDF3',
+    borderColor: '#86EFAC',
+  },
+  resultCardLate: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74',
+  },
   resultHeader: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
     flexDirection: 'row',
     gap: 12,
   },
   resultIcon: {
     alignItems: 'center',
-    backgroundColor: '#16A34A',
     borderRadius: 18,
     height: 36,
     justifyContent: 'center',
     width: 36,
   },
-  resultIconText: { color: '#FFFFFF', fontSize: 20, fontWeight: '900' },
-  resultTitle: { color: '#065F46', fontSize: 17, fontWeight: '800' },
-  resultSub: { color: '#166534', fontSize: 13, lineHeight: 19, marginTop: 2 },
+  resultIconOnTime: {
+    backgroundColor: '#15803D',
+  },
+  resultIconLate: {
+    backgroundColor: '#C2410C',
+  },
+  resultIconText: { color: '#FFFFFF', fontSize: 19, fontWeight: '900' },
+  resultTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  resultTitle: { color: '#166534', fontSize: 17, fontWeight: '800' },
+  resultTitleLate: { color: '#9A3412' },
+  resultSub: { color: '#166534', fontSize: 13, lineHeight: 19, marginTop: 3 },
+  resultSubLate: { color: '#9A3412' },
+  timelinessBadge: {
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  timelinessOnTime: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#86EFAC',
+  },
+  timelinessLate: {
+    backgroundColor: '#FFEDD5',
+    borderColor: '#FDBA74',
+  },
+  timelinessBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  timelinessTextOnTime: {
+    color: '#166534',
+  },
+  timelinessTextLate: {
+    color: '#9A3412',
+  },
   resultStatsRow: { flexDirection: 'row', gap: 10 },
   resultStatBox: {
     backgroundColor: '#FFFFFF',
-    borderColor: '#D1FADF',
+    borderColor: '#BBF7D0',
     borderRadius: 12,
     borderWidth: 1,
     flex: 1,
     padding: 12,
   },
+  resultStatBoxLate: {
+    borderColor: '#FED7AA',
+  },
   resultStatLabel: {
-    color: '#64748B',
+    color: '#475569',
     fontSize: 11,
     fontWeight: '700',
     textTransform: 'uppercase',
   },
-  resultStatValue: { color: '#0F172A', fontSize: 14, fontWeight: '800', marginTop: 4 },
+  resultStatValue: { color: colors.text, fontSize: 14, fontWeight: '800', marginTop: 4 },
+  fineNoticeBox: {
+    backgroundColor: '#FFEDD5',
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    borderRadius: 12,
+    padding: 12,
+    gap: 3,
+  },
+  fineNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#9A3412',
+  },
+  fineNoticeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#9A3412',
+    lineHeight: 18,
+  },
   resultNote: { color: '#334155', fontSize: 13, fontStyle: 'italic' },
   resultActionsRow: { flexDirection: 'row', gap: 10 },
   errorCard: { gap: 10 },
   disabledReasonBox: {
-    backgroundColor: '#FFF7E8',
+    backgroundColor: '#FEF3C7',
     borderColor: '#FDE68A',
     borderRadius: 12,
     borderWidth: 1,
     padding: 12,
   },
   disabledReasonText: {
-    color: '#7A4D00',
+    color: '#92400E',
     fontSize: 13,
     fontWeight: '600',
     lineHeight: 19,

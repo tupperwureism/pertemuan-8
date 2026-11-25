@@ -46,6 +46,10 @@ function routeFromNotification(notification: Notifications.Notification): void {
   }
   if (type === 'PERMISSION_DECIDED') {
     router.push('/praktikan/izin' as Href);
+    return;
+  }
+  if (type === 'FINE_CREATED' || type === 'PAYMENT_SUCCESS' || type === 'PAYMENT_FAILED') {
+    router.push('/praktikan/denda' as Href);
   }
 }
 

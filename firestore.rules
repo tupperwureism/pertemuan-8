@@ -25,6 +25,16 @@ service cloud.firestore {
         && get(profilePath(request.auth.uid)).data.role == 'asisten';
     }
 
+    function isAslab() {
+      return signedIn()
+        && exists(profilePath(request.auth.uid))
+        && get(profilePath(request.auth.uid)).data.role == 'aslab';
+    }
+
+    function isStaff() {
+      return isAsisten() || isAslab();
+    }
+
     function memberPath(classId) {
       return /databases/$(database)/documents/classMembers/$(classId + '_' + request.auth.uid);
     }
@@ -84,8 +94,8 @@ service cloud.firestore {
     // ------------------------------------------------------------- users
 
     match /users/{uid} {
-      allow get: if isOwner(uid) || isAsisten();
-      allow list: if isAsisten();
+      allow get: if isOwner(uid) || isStaff();
+      allow list: if isStaff();
 
       // Registrasi publik: SELALU praktikan, ID = UID, email = email token Auth.
       allow create: if isOwner(uid)
@@ -128,40 +138,40 @@ service cloud.firestore {
     }
 
     match /classes/{classId} {
-      allow read: if (isAsisten() && request.auth.uid in resource.data.assistantIds)
+      allow read: if isAslab()
+        || (isAsisten() && request.auth.uid in resource.data.assistantIds)
         || isMember(classId);
 
-      allow create: if isAsisten()
+      allow create: if (isAslab() || isAsisten())
         && validClassFields(request.resource.data)
-        && request.auth.uid in request.resource.data.assistantIds
+        && (isAslab() || request.auth.uid in request.resource.data.assistantIds)
         && request.resource.data.createdAt == request.time;
 
-      allow update: if isAsisten()
-        && request.auth.uid in resource.data.assistantIds
+      allow update: if (isAslab() || isClassAsisten(classId))
         && validClassFields(request.resource.data)
-        && request.auth.uid in request.resource.data.assistantIds
+        && (isAslab() || request.auth.uid in request.resource.data.assistantIds)
         && request.resource.data.createdAt == resource.data.createdAt;
 
-      allow delete: if isAsisten()
-        && request.auth.uid in resource.data.assistantIds;
+      allow delete: if isAslab() || isClassAsisten(classId);
     }
 
     // ------------------------------------------------------ classMembers
 
     match /classMembers/{memberId} {
-      allow read: if (signedIn() && resource.data.uid == request.auth.uid)
+      allow read: if isAslab()
+        || (signedIn() && resource.data.uid == request.auth.uid)
         || isClassAsisten(resource.data.classId);
 
-      allow create: if isClassAsisten(request.resource.data.classId)
+      allow create: if (isAslab() || isClassAsisten(request.resource.data.classId))
         && request.resource.data.keys().hasOnly(['classId', 'uid', 'role', 'joinedAt'])
         && request.resource.data.keys().hasAll(['classId', 'uid', 'role', 'joinedAt'])
         && memberId == request.resource.data.classId + '_' + request.resource.data.uid
-        && request.resource.data.role in ['praktikan', 'asisten']
+        && request.resource.data.role in ['praktikan', 'asisten', 'aslab']
         && exists(profilePath(request.resource.data.uid))
         && request.resource.data.joinedAt == request.time;
 
       allow update: if false;
-      allow delete: if isClassAsisten(resource.data.classId);
+      allow delete: if isAslab() || isClassAsisten(resource.data.classId);
     }
 
     // ---------------------------------------------------------- sessions
@@ -185,24 +195,25 @@ service cloud.firestore {
     }
 
     match /sessions/{sessionId} {
-      allow read: if isMember(resource.data.classId)
+      allow read: if isAslab()
+        || isMember(resource.data.classId)
         || isClassAsisten(resource.data.classId);
 
-      allow create: if isClassAsisten(request.resource.data.classId)
+      allow create: if (isAslab() || isClassAsisten(request.resource.data.classId))
         && validSessionFields(request.resource.data)
         && request.resource.data.status == 'BELUM_DIBUKA'
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time;
 
       // Status hanya maju: BELUM_DIBUKA -> DIBUKA -> DITUTUP. Identitas sesi terkunci.
-      allow update: if isClassAsisten(resource.data.classId)
+      allow update: if (isAslab() || isClassAsisten(resource.data.classId))
         && validSessionFields(request.resource.data)
         && request.resource.data.classId == resource.data.classId
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.createdAt == resource.data.createdAt
         && validTransition(resource.data.status, request.resource.data.status);
 
-      allow delete: if isClassAsisten(resource.data.classId);
+      allow delete: if isAslab() || isClassAsisten(resource.data.classId);
     }
 
     // ------------------------------------------------------- attendances
@@ -246,14 +257,27 @@ service cloud.firestore {
             : (sess.labId is string && validAttendanceForLab(data, sess.labId)));
     }
 
+    function validAttendanceTimeliness(data) {
+      return (!('timeliness' in data)
+              || data.timeliness in ['TEPAT_WAKTU', 'TERLAMBAT'])
+        && (!('lateMinutes' in data)
+              || (data.lateMinutes is number && data.lateMinutes >= 0))
+        && (!('gracePeriodMinutes' in data)
+              || (data.gracePeriodMinutes is number
+                  && data.gracePeriodMinutes >= 0
+                  && data.gracePeriodMinutes <= 180));
+    }
+
     match /attendances/{attendanceId} {
-      allow read: if (signedIn() && resource.data.praktikanUid == request.auth.uid)
+      allow read: if isAslab()
+        || (signedIn() && resource.data.praktikanUid == request.auth.uid)
         || isClassAsisten(resource.data.classId);
 
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly(
              ['sessionId', 'classId', 'praktikanUid', 'attendedAt', 'catatan',
-              'labId', 'latitude', 'longitude', 'accuracy', 'distanceMeter'])
+              'labId', 'latitude', 'longitude', 'accuracy', 'distanceMeter',
+              'timeliness', 'lateMinutes', 'gracePeriodMinutes'])
         && request.resource.data.keys().hasAll(
              ['sessionId', 'classId', 'praktikanUid', 'attendedAt'])
         && request.resource.data.praktikanUid == request.auth.uid
@@ -262,6 +286,7 @@ service cloud.firestore {
         && (!('catatan' in request.resource.data)
             || (request.resource.data.catatan is string
                 && request.resource.data.catatan.size() <= 500))
+        && validAttendanceTimeliness(request.resource.data)
         && validAttendanceSession(request.resource.data, sessionData(request.resource.data.sessionId))
         && isMember(request.resource.data.classId)
         && (!exists(permissionPath(request.resource.data.sessionId, request.auth.uid))
@@ -285,7 +310,8 @@ service cloud.firestore {
     }
 
     match /permissions/{permissionId} {
-      allow read: if (signedIn() && resource.data.praktikanUid == request.auth.uid)
+      allow read: if isAslab()
+        || (signedIn() && resource.data.praktikanUid == request.auth.uid)
         || isClassAsisten(resource.data.classId);
 
       allow create: if signedIn()
@@ -337,7 +363,8 @@ service cloud.firestore {
     function validLabFields(data) {
       return data.keys().hasOnly(
                ['nama', 'gedung', 'deskripsi', 'latitude', 'longitude', 'radiusMeter', 'cosLat',
-                'createdBy', 'createdAt', 'updatedAt'])
+                'mataKuliah', 'classId', 'gracePeriodMinutes', 'fineAmount', 'asprakIds',
+                'aslabIds', 'createdBy', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(
                ['nama', 'gedung', 'deskripsi', 'latitude', 'longitude', 'radiusMeter', 'cosLat',
                 'createdBy', 'createdAt', 'updatedAt'])
@@ -348,23 +375,117 @@ service cloud.firestore {
         && data.longitude is number && data.longitude >= -180 && data.longitude <= 180
         && data.radiusMeter is number && data.radiusMeter >= 10 && data.radiusMeter <= 1000
         && data.cosLat is number && data.cosLat > 0 && data.cosLat <= 1
+        && (!('mataKuliah' in data) || shortText(data.mataKuliah, 100))
+        && (!('classId' in data) || data.classId == null || shortText(data.classId, 100))
+        && (!('gracePeriodMinutes' in data)
+            || (data.gracePeriodMinutes is number
+                && data.gracePeriodMinutes >= 0 && data.gracePeriodMinutes <= 180))
+        && (!('fineAmount' in data)
+            || (data.fineAmount is number && data.fineAmount >= 0 && data.fineAmount <= 500000))
+        && (!('asprakIds' in data) || data.asprakIds is list)
+        && (!('aslabIds' in data) || data.aslabIds is list)
         && data.updatedAt == request.time;
     }
 
     match /labs/{labId} {
       allow read: if signedIn();
 
-      allow create: if isAsisten()
+      allow create: if isAslab()
         && validLabFields(request.resource.data)
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time;
 
-      allow update: if isAsisten()
+      allow update: if isAslab()
         && validLabFields(request.resource.data)
         && request.resource.data.createdBy == resource.data.createdBy
         && request.resource.data.createdAt == resource.data.createdAt;
 
-      allow delete: if isAsisten();
+      allow delete: if isAslab();
+    }
+
+    // -------------------------------------------------------- labMembers
+
+    function validLabMemberFields(data, memberId) {
+      return data.keys().hasOnly(
+               ['labId', 'uid', 'role', 'nama', 'nomorInduk', 'email', 'assignedBy',
+                'assignedAt', 'updatedAt'])
+        && data.keys().hasAll(
+               ['labId', 'uid', 'role', 'nama', 'nomorInduk', 'email', 'assignedBy',
+                'assignedAt', 'updatedAt'])
+        && memberId == data.labId + '_' + data.uid
+        && labExists(data.labId)
+        && exists(profilePath(data.uid))
+        && data.role in ['praktikan', 'asisten', 'aslab']
+        && shortText(data.nama, 100)
+        && shortText(data.nomorInduk, 30)
+        && shortText(data.email, 320)
+        && data.assignedBy == request.auth.uid
+        && data.updatedAt == request.time;
+    }
+
+    match /labMembers/{memberId} {
+      allow read: if isAslab()
+        || isAsisten()
+        || (signedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isAslab()
+        && validLabMemberFields(request.resource.data, memberId)
+        && request.resource.data.assignedAt == request.time;
+
+      allow update: if isAslab()
+        && validLabMemberFields(request.resource.data, memberId)
+        && request.resource.data.labId == resource.data.labId
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.assignedBy == resource.data.assignedBy
+        && request.resource.data.assignedAt == resource.data.assignedAt;
+
+      allow delete: if isAslab();
+    }
+
+    // ------------------------------------------------------------- fines
+
+    function validFineFields(data, id) {
+      return data.keys().hasOnly(
+               ['attendanceId', 'sessionId', 'classId', 'labId', 'sessionTitle', 'labName',
+                'praktikanUid', 'amount', 'lateMinutes', 'status', 'latestOrderId',
+                'latestPaymentStatus', 'issuedAt', 'paidAt', 'updatedAt'])
+        && data.keys().hasAll(
+               ['attendanceId', 'sessionId', 'classId', 'labId', 'sessionTitle', 'labName',
+                'praktikanUid', 'amount', 'lateMinutes', 'status', 'latestOrderId',
+                'latestPaymentStatus', 'issuedAt', 'paidAt', 'updatedAt'])
+        && id == data.sessionId + '_' + data.praktikanUid
+        && data.attendanceId == id
+        && data.praktikanUid == request.auth.uid
+        && shortText(data.sessionTitle, 150)
+        && data.labName is string && data.labName.size() <= 100
+        && (data.labId == null || shortText(data.labId, 100))
+        && data.amount is number && data.amount > 0 && data.amount <= 500000
+        && data.lateMinutes is number && data.lateMinutes >= 1
+        && data.status == 'UNPAID'
+        && data.latestOrderId == null
+        && data.latestPaymentStatus == null
+        && data.paidAt == null
+        && data.issuedAt == request.time
+        && data.updatedAt == request.time
+        && exists(attendancePath(data.sessionId, data.praktikanUid))
+        && get(attendancePath(data.sessionId, data.praktikanUid)).data.classId == data.classId;
+    }
+
+    match /fines/{fineId} {
+      allow read: if isAslab()
+        || (signedIn() && resource.data.praktikanUid == request.auth.uid)
+        || isClassAsisten(resource.data.classId);
+
+      allow create: if signedIn() && validFineFields(request.resource.data, fineId);
+      allow update, delete: if false;
+    }
+
+    // ----------------------------------------------- paymentTransactions
+
+    match /paymentTransactions/{orderId} {
+      allow read: if isAslab()
+        || (signedIn() && resource.data.praktikanUid == request.auth.uid);
+      allow create, update, delete: if false;
     }
 
     // -------------------------------------------------------- pushTokens

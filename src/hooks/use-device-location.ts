@@ -21,6 +21,8 @@ export interface UseDeviceLocationResult {
 /**
  * Mengambil posisi perangkat saat mount; bila `watch: true`, melanjutkan pemantauan real-time
  * dan membersihkan langganan otomatis saat komponen unmount.
+ * Bila posisi sebelumnya sudah tersedia dan pembaruan berikutnya gagal sesaat, `fix` terakhir
+ * tetap dipertahankan sementara `status` menjadi `'error'` dan `error` terisi.
  */
 export function useDeviceLocation(opts?: { watch?: boolean }): UseDeviceLocationResult {
   const watch = opts?.watch ?? false;
@@ -53,7 +55,6 @@ export function useDeviceLocation(opts?: { watch?: boolean }): UseDeviceLocation
           },
           (watchError) => {
             if (cancelled) return;
-            setFix(null);
             setError(watchError);
             setStatus('error');
           },
@@ -68,7 +69,6 @@ export function useDeviceLocation(opts?: { watch?: boolean }): UseDeviceLocation
         if (cancelled) return;
         const locError =
           err instanceof LocationError ? err : new LocationError('UNAVAILABLE');
-        setFix(null);
         setError(locError);
         setStatus('error');
       }

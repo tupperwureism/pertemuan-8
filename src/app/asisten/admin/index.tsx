@@ -1,58 +1,23 @@
 import { router, type Href } from 'expo-router';
-import { useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   colors,
   EmptyState,
-  ErrorBanner,
   ErrorState,
-  FormField,
-  FormSheet,
   LoadingState,
-  PrimaryButton,
   ScreenHeader,
 } from '@/components/screen-kit';
 import { useVisibleClasses } from '@/hooks/use-firestore-data';
 import { getErrorMessage } from '@/services/authService';
-import { createClass } from '@/services/classService';
 import type { ClassDoc } from '@/types/firebase';
 
-const EMPTY_FORM = { nama: '', mataPraktikum: '', kodeKelas: '' };
-
-/** Daftar kelas milik asisten + pembuatan kelas baru. Guard role ada di asisten/_layout.tsx. */
+/** Daftar kelas yang menjadi tanggung jawab Asprak (baca-saja untuk konfigurasi kelas/lab). */
 export default function AdminClassesScreen() {
   const { data: classes, loading, error, retry } = useVisibleClasses('asisten');
-  const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [formError, setFormError] = useState('');
-  const [saving, setSaving] = useState(false);
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/jadwal' as Href));
-
-  const openForm = () => {
-    setForm(EMPTY_FORM);
-    setFormError('');
-    setFormOpen(true);
-  };
-
-  const handleCreate = async () => {
-    if (!form.nama.trim() || !form.mataPraktikum.trim() || !form.kodeKelas.trim()) {
-      setFormError('Nama kelas, mata praktikum, dan kode kelas wajib diisi.');
-      return;
-    }
-    setSaving(true);
-    setFormError('');
-    try {
-      await createClass(form);
-      setFormOpen(false);
-    } catch (e) {
-      setFormError(getErrorMessage(e));
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const renderItem = ({ item }: { item: ClassDoc }) => (
     <Pressable
@@ -65,12 +30,12 @@ export default function AdminClassesScreen() {
       </View>
       <Text style={styles.cardTitle}>{item.nama}</Text>
       <Text style={styles.cardSubtitle}>{item.mataPraktikum}</Text>
-      <Text style={styles.cardAction}>Kelola peserta &amp; sesi →</Text>
+      <Text style={styles.cardAction}>Kelola sesi &amp; lihat peserta</Text>
     </Pressable>
   );
 
   const renderBody = () => {
-    if (loading) return <LoadingState label="Memuat kelas…" />;
+    if (loading) return <LoadingState label="Memuat kelas..." />;
     if (error) return <ErrorState message={getErrorMessage(error)} onRetry={retry} />;
     return (
       <FlatList
@@ -80,10 +45,9 @@ export default function AdminClassesScreen() {
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <EmptyState
-            icon="🏫"
-            title="Belum ada kelas"
-            subtitle="Buat kelas pertama, lalu tambahkan peserta dan sesi praktikum."
-            action={<PrimaryButton label="Tambah Kelas" tone="asisten" onPress={openForm} />}
+            icon="0"
+            title="Belum ada kelas yang diampu"
+            subtitle="Penugasan kelas dan distribusi praktikan dilakukan oleh Aslab."
           />
         }
       />
@@ -92,39 +56,16 @@ export default function AdminClassesScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScreenHeader
-        title="Kelola Kelas"
-        onBack={goBack}
-        right={
-          <Pressable accessibilityRole="button" onPress={openForm} style={styles.addButton}>
-            <Text style={styles.addButtonText}>+ Kelas</Text>
-          </Pressable>
-        }
-      />
+      <ScreenHeader title="Kelas Saya" onBack={goBack} />
 
-      <Pressable
-        accessibilityRole="button"
-        style={({ pressed }) => [styles.labBanner, pressed && styles.cardPressed]}
-        onPress={() => router.push('/asisten/admin/lab' as Href)}
-      >
-        <View style={styles.labBannerCopy}>
-          <Text style={styles.labBannerTitle}>Kelola Laboratorium</Text>
-          <Text style={styles.labBannerSubtitle}>
-            Atur koordinat lokasi dan radius presensi tiap lab
-          </Text>
-        </View>
-        <Text style={styles.cardAction}>Buka →</Text>
-      </Pressable>
+      <View style={styles.infoBanner}>
+        <Text style={styles.infoBannerTitle}>Kewenangan Asprak</Text>
+        <Text style={styles.infoBannerSubtitle}>
+          Konfigurasi lab dan distribusi praktikan dikelola oleh Aslab. Anda dapat mengelola jadwal dan sesi pada kelas yang Anda ampu.
+        </Text>
+      </View>
 
       {renderBody()}
-
-      <FormSheet visible={formOpen} title="Tambah Kelas" onClose={() => setFormOpen(false)}>
-        <FormField label="Nama Kelas" maxLength={100} value={form.nama} onChangeText={(v) => setForm((f) => ({ ...f, nama: v }))} placeholder="Contoh: Informatika A" />
-        <FormField label="Mata Praktikum" maxLength={100} value={form.mataPraktikum} onChangeText={(v) => setForm((f) => ({ ...f, mataPraktikum: v }))} placeholder="Contoh: Pemrograman Bergerak" />
-        <FormField label="Kode Kelas" maxLength={30} value={form.kodeKelas} onChangeText={(v) => setForm((f) => ({ ...f, kodeKelas: v }))} placeholder="Contoh: IF-A" autoCapitalize="characters" />
-        {formError ? <ErrorBanner message={formError} /> : null}
-        <PrimaryButton label="Simpan Kelas" tone="asisten" onPress={handleCreate} loading={saving} />
-      </FormSheet>
     </SafeAreaView>
   );
 }
@@ -148,26 +89,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  kodeBadgeText: { fontSize: 12, fontWeight: '800', color: '#6D28D9' },
+  kodeBadgeText: { fontSize: 12, fontWeight: '800', color: '#5B21B6' },
   cardTitle: { fontSize: 17, fontWeight: '800', color: colors.text },
-  cardSubtitle: { fontSize: 13, color: colors.textMuted },
+  cardSubtitle: { fontSize: 13, color: '#475569' },
   cardAction: { fontSize: 13, fontWeight: '700', color: colors.asisten, marginTop: 4 },
-  addButton: { backgroundColor: colors.asisten, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10 },
-  addButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-  labBanner: {
+  infoBanner: {
     marginHorizontal: 16,
     marginTop: 14,
-    backgroundColor: colors.card,
-    borderRadius: 16,
+    backgroundColor: '#F5F3FF',
+    borderRadius: 14,
     padding: 14,
     borderWidth: 1,
     borderColor: '#DDD6FE',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    gap: 4,
   },
-  labBannerCopy: { flex: 1, gap: 2 },
-  labBannerTitle: { fontSize: 15, fontWeight: '800', color: colors.text },
-  labBannerSubtitle: { fontSize: 12, color: colors.textMuted },
+  infoBannerTitle: { fontSize: 14, fontWeight: '800', color: '#5B21B6' },
+  infoBannerSubtitle: { fontSize: 12, color: '#334155', lineHeight: 18 },
 });

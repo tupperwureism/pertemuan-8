@@ -190,8 +190,8 @@ export interface PaymentTransactionDoc {
   paymentType: string | null;
   midtransTransactionId: string | null;
   midtransTransactionStatus: string | null;
-  snapToken: string | null;
-  redirectUrl: string | null;
+  snapToken: string;
+  redirectUrl: string;
   fineIssuedAt: ServerTimestamp;
   createdAt: ServerTimestamp;
   settledAt: ServerTimestamp;

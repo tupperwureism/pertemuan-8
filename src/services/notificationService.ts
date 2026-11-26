@@ -7,24 +7,31 @@ import {
   type PushTokenDoc,
   type SessionDoc,
 } from '@/types/firebase';
+import { formatRupiah } from '@/lib/attendance-policy';
 
 import { firestore, withId } from './firebase';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const EXPO_PUSH_BATCH_SIZE = 100;
 
-type PushNotificationType = 'SESSION_OPENED' | 'SESSION_RESCHEDULED' | 'PERMISSION_DECIDED';
+type PushNotificationType =
+  | 'SESSION_OPENED'
+  | 'SESSION_RESCHEDULED'
+  | 'PERMISSION_DECIDED'
+  | 'FINE_CREATED';
 
 const PUSH_TTL_SECONDS: Record<PushNotificationType, number> = {
   SESSION_OPENED: 7200,
   SESSION_RESCHEDULED: 86400,
   PERMISSION_DECIDED: 86400,
+  FINE_CREATED: 86400,
 };
 
 interface PushPayloadData {
   type: PushNotificationType;
   sessionId: string;
   permissionId?: string;
+  fineId?: string;
 }
 
 interface ExpoPushTicket {
@@ -195,5 +202,28 @@ export async function notifyPermissionDecided(
     });
   } catch (error) {
     console.warn('[notificationService] notifyPermissionDecided gagal:', error);
+  }
+}
+
+/** Mengirim pemberitahuan tagihan baru kepada praktikan. Tidak pernah melempar error. */
+export async function notifyFineCreated(fine: {
+  id: string;
+  sessionId: string;
+  sessionTitle: string;
+  praktikanUid: string;
+  amount: number;
+}): Promise<void> {
+  try {
+    await sendPush([fine.praktikanUid], {
+      title: 'Tagihan Denda Keterlambatan',
+      body: `Anda terlambat pada sesi ${fine.sessionTitle}. Tagihan: ${formatRupiah(fine.amount)}.`,
+      data: {
+        type: 'FINE_CREATED',
+        sessionId: fine.sessionId,
+        fineId: fine.id,
+      },
+    });
+  } catch (error) {
+    console.warn('[notificationService] notifyFineCreated gagal:', error);
   }
 }

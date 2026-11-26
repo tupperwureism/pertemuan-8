@@ -22,6 +22,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-ppk-pertemuan-8';
@@ -491,6 +492,14 @@ describe('fondasi Sprint 4', () => {
       paidAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     }));
+  });
+
+  it('presensi terlambat dan denda dapat dibuat atomik dalam satu transaksi client', async () => {
+    const db = praktikanB();
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'attendances', `${OPEN_SESSION}_prkB`), attendanceWithTimeliness());
+    batch.set(doc(db, 'fines', `${OPEN_SESSION}_prkB`), fine());
+    await assertSucceeds(batch.commit());
   });
 
   it('praktikan dan aslab tidak dapat menulis paymentTransactions', async () => {

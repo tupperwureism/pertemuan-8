@@ -467,8 +467,8 @@ service cloud.firestore {
         && data.paidAt == null
         && data.issuedAt == request.time
         && data.updatedAt == request.time
-        && exists(attendancePath(data.sessionId, data.praktikanUid))
-        && get(attendancePath(data.sessionId, data.praktikanUid)).data.classId == data.classId;
+        && existsAfter(attendancePath(data.sessionId, data.praktikanUid))
+        && getAfter(attendancePath(data.sessionId, data.praktikanUid)).data.classId == data.classId;
     }
 
     match /fines/{fineId} {

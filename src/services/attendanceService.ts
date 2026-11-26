@@ -12,8 +12,13 @@ import {
 
 import { distanceMeters, isWithinRadius, MAX_ACCURACY_METER } from '@/lib/geo';
 import {
+  evaluateAttendanceTimeliness,
+  resolveFineAmount,
+} from '@/lib/attendance-policy';
+import {
   attendanceId,
   COLLECTIONS,
+  fineId,
   type AttendanceDoc,
   type ClassDoc,
   type ErrorCallback,
@@ -24,6 +29,7 @@ import {
 } from '@/types/firebase';
 
 import { firestore, requireUid, toError, withId } from './firebase';
+import { notifyFineCreated } from './notificationService';
 import { subscribeAttendances } from './sessionService';
 
 export { subscribeAttendances };
@@ -111,6 +117,13 @@ export async function recordAttendance(
 
   const targetId = attendanceId(cleanSessionId, authUid);
   const targetRef = attendanceRef(targetId);
+  let createdFine: {
+    id: string;
+    sessionId: string;
+    sessionTitle: string;
+    praktikanUid: string;
+    amount: number;
+  } | null = null;
 
   await runTransaction(firestore(), async (tx) => {
     const sessSnap = await tx.get(sessionRef(cleanSessionId));
@@ -127,6 +140,12 @@ export async function recordAttendance(
       );
     }
 
+    const sessionLabId =
+      typeof sessData.labId === 'string' && sessData.labId.trim().length > 0
+        ? sessData.labId
+        : null;
+    let labData: Omit<LabDoc, 'id'> | null = null;
+
     const payload: Record<string, unknown> = {
       sessionId: cleanSessionId,
       classId: sessData.classId,
@@ -134,11 +153,6 @@ export async function recordAttendance(
       attendedAt: serverTimestamp(),
       ...(trimmedNote ? { catatan: trimmedNote } : {}),
     };
-
-    const sessionLabId =
-      typeof sessData.labId === 'string' && sessData.labId.trim().length > 0
-        ? sessData.labId
-        : null;
 
     if (sessionLabId) {
       if (
@@ -173,7 +187,7 @@ export async function recordAttendance(
       if (!labSnap.exists()) {
         throw new Error('Data laboratorium untuk sesi ini tidak ditemukan. Hubungi asisten.');
       }
-      const labData = labSnap.data() as Omit<LabDoc, 'id'>;
+      labData = labSnap.data() as Omit<LabDoc, 'id'>;
       const rawDistance = distanceMeters(
         { latitude: location.latitude, longitude: location.longitude },
         { latitude: labData.latitude, longitude: labData.longitude },
@@ -193,8 +207,50 @@ export async function recordAttendance(
       payload.distanceMeter = roundedDistance;
     }
 
+    const timeliness = evaluateAttendanceTimeliness(
+      sessData.startsAt.toMillis(),
+      Date.now(),
+      labData?.gracePeriodMinutes,
+    );
+    payload.timeliness = timeliness.timeliness;
+    payload.lateMinutes = timeliness.lateMinutes;
+    payload.gracePeriodMinutes = timeliness.gracePeriodMinutes;
+
     tx.set(targetRef, payload);
+
+    const amount = resolveFineAmount(labData?.fineAmount);
+    if (timeliness.isLate && amount > 0) {
+      const targetFineId = fineId(cleanSessionId, authUid);
+      tx.set(doc(firestore(), COLLECTIONS.fines, targetFineId), {
+        attendanceId: targetId,
+        sessionId: cleanSessionId,
+        classId: sessData.classId,
+        labId: sessionLabId,
+        sessionTitle: sessData.judul,
+        labName: labData?.nama ?? sessData.ruangan,
+        praktikanUid: authUid,
+        amount,
+        lateMinutes: timeliness.lateMinutes,
+        status: 'UNPAID',
+        latestOrderId: null,
+        latestPaymentStatus: null,
+        issuedAt: serverTimestamp(),
+        paidAt: null,
+        updatedAt: serverTimestamp(),
+      });
+      createdFine = {
+        id: targetFineId,
+        sessionId: cleanSessionId,
+        sessionTitle: sessData.judul,
+        praktikanUid: authUid,
+        amount,
+      };
+    }
   });
+
+  if (createdFine) {
+    void notifyFineCreated(createdFine);
+  }
 }
 
 /**
